@@ -26,8 +26,11 @@ const targets = {
   firefox: {
     ...base,
     background: { scripts: ["background.js"] },
-    permissions: ["tabs", "activeTab", "scripting", "storage", "unlimitedStorage", "webRequest", "webRequestBlocking", "webNavigation", "cookies", "alarms"],
+    permissions: ["tabs", "activeTab", "scripting", "storage", "unlimitedStorage", "webRequest", "webRequestBlocking", "webNavigation", "cookies", "alarms", "nativeMessaging"],
     optional_permissions: ["userScripts"],
+    // Firefox's MV3 default adds upgrade-insecure-requests, which turns the
+    // ws://127.0.0.1 connection to the host into wss:// and breaks it.
+    content_security_policy: { extension_pages: "script-src 'self'; object-src 'self'" },
     browser_specific_settings: {
       gecko: { id: "tether@udaysinh.me", strict_min_version: "128.0", data_collection_permissions: { required: ["none"] } },
     },

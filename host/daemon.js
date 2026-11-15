@@ -101,8 +101,16 @@ export async function serve({ quiet = false } = {}) {
     }
   });
 
+  // A TLS hello or other garbage on this plain-HTTP port usually means a
+  // client was upgraded to https/wss; say so instead of failing silently.
+  server.on("clientError", (err, socket) => {
+    if (String(err.code).startsWith("HPE_")) log(`bad request on the port (${err.code}); a client may be using wss/https instead of ws/http`);
+    socket.destroy();
+  });
+
   server.on("upgrade", (req, socket, head) => {
     const url = new URL(req.url, "http://localhost");
+    log(`websocket upgrade ${url.pathname} host=${req.headers.host} origin=${req.headers.origin || "(none)"}`);
     if (url.pathname !== "/ext" || !hosts.has(req.headers.host)) {
       socket.destroy();
       return;

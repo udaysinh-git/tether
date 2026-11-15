@@ -85,7 +85,7 @@ async function init() {
     try { await api.windows.get(w); state.agentWindows.add(w); } catch {}
   }
   const s = await settings();
-  state.standby = !!s.key && s.standby;
+  state.standby = (!!s.key || IS_FIREFOX) && s.standby;
   if (active()) connect();
 }
 
@@ -102,7 +102,7 @@ async function settings() {
 
 async function refreshStandby() {
   const s = await settings();
-  state.standby = !!s.key && s.standby;
+  state.standby = (!!s.key || IS_FIREFOX) && s.standby;
   if (active()) connect();
 }
 
@@ -124,16 +124,54 @@ async function browserName() {
 
 // ---------------------------------------------------------------- connection
 
+// Firefox (and Zen, LibreWolf...) upgrades ws://127.0.0.1 to wss:// for MV3
+// extensions, so there the browser starts a native bridge (host/native.js)
+// and talks to it over native messaging. It also fills in the pairing key.
+const USE_NATIVE = IS_FIREFOX;
+const NATIVE_MISSING = "Tether's bridge isn't registered with this browser. Run “node host/cli.js install-native” in the tether folder, then reload the extension.";
+
+class NativeSocket {
+  constructor() {
+    this.readyState = 0;
+    this.port = api.runtime.connectNative("tether");
+    this.port.onMessage.addListener((m) => {
+      if (m?.type === "bridge") {
+        if (m.open) { this.readyState = 1; this.onopen?.(); }
+        if (m.error) this.error = m.error;
+        if (m.closed) this.closeCode = m.closed;
+        return;
+      }
+      this.onmessage?.({ data: JSON.stringify(m) });
+    });
+    this.port.onDisconnect.addListener((p) => {
+      if (this.readyState === 3) return;
+      this.readyState = 3;
+      const err = p?.error?.message || api.runtime.lastError?.message || this.error || "";
+      this.onclose?.({ code: this.closeCode || (/native/i.test(err) ? 4404 : 1006), reason: err });
+    });
+  }
+  send(s) {
+    this.port.postMessage(JSON.parse(s));
+  }
+  close(code = 1000) {
+    if (this.readyState === 3) return;
+    this.readyState = 3;
+    try { this.port.disconnect(); } catch {}
+    this.onclose?.({ code });
+  }
+}
+
 async function connect() {
   if (ws && (ws.readyState === 0 || ws.readyState === 1)) return;
   clearTimeout(retryTimer);
   const { key, port } = await settings();
-  if (!key) return setConn("denied", "Add the pairing key to connect.");
+  if (!key && !USE_NATIVE) return setConn("denied", "Add the pairing key to connect.");
   setConn("connecting");
   let sock;
   try {
-    sock = new WebSocket(`ws://127.0.0.1:${port}/ext`);
+    sock = USE_NATIVE ? new NativeSocket() : new WebSocket(`ws://127.0.0.1:${port}/ext`);
   } catch (e) {
+    if (USE_NATIVE) return setConn("denied", NATIVE_MISSING);
     return scheduleRetry();
   }
   ws = sock;
@@ -147,6 +185,7 @@ async function connect() {
     clearInterval(pingTimer);
     state.agents = [];
     if (e.code === 4003) return setConn("denied", "The pairing key doesn't match. Run “tether key” and paste the new one.");
+    if (e.code === 4404) return setConn("denied", NATIVE_MISSING);
     if (active()) scheduleRetry();
     else setConn("off");
   };
@@ -1388,7 +1427,7 @@ async function popupState(tabId) {
   let tab = null;
   try { tab = await api.tabs.get(tabId); } catch {}
   return {
-    paired: !!s.key,
+    paired: !!s.key || IS_FIREFOX,
     bypass: state.bypass,
     recordValues: state.recordValues,
     recording: tab ? state.recording.get(tab.id) || null : null,

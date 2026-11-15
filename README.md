@@ -90,9 +90,12 @@ Any other MCP client takes the same command as a stdio server.
 
 ### Firefox
 
-1. Open `about:debugging#/runtime/this-firefox`, click **Load Temporary Add-on** and pick `dist/firefox/manifest.json`.
-2. Click Tether in the toolbar and paste the pairing key. The first time you share a tab, Firefox asks for access to all sites; allow it.
-3. Optional: in Tether's settings, click **Allow user scripts**.
+This covers Firefox and browsers built on it, such as Zen, LibreWolf, Floorp and Waterfox.
+
+1. Make sure `node host/cli.js setup` (or `node host/cli.js install-native`) has run. It registers a small bridge the browser starts through native messaging. Firefox upgrades an MV3 extension's `ws://127.0.0.1` connection to `wss://`, which can't reach the host, so Firefox talks to the bridge instead. The bridge starts the host if it isn't running and supplies the pairing key, so there's nothing to paste.
+2. Open `about:debugging#/runtime/this-firefox`, click **Load Temporary Add-on** and pick `dist/firefox/manifest.json`.
+3. The first time you share a tab, Firefox asks for access to all sites; allow it.
+4. Optional: in Tether's settings, click **Allow user scripts**.
 
 Temporary add-ons are removed when Firefox closes. To keep it installed, sign it as an unlisted add-on with `npx web-ext sign -s dist/firefox --channel unlisted` (needs an addons.mozilla.org API key), or use Firefox Developer Edition with `xpinstall.signatures.required` set to `false`.
 

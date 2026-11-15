@@ -21,6 +21,7 @@ export class Hub {
   handleUpgrade(req, socket, head) {
     const origin = req.headers.origin || "";
     if (!EXT_ORIGIN.test(origin)) {
+      this.log(`refused a WebSocket from origin "${origin || "(none)"}"`);
       socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
       socket.destroy();
       return;

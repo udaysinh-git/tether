@@ -14,6 +14,9 @@ const HELP = `tether: hand browser tabs to your coding agent
   tether key --new     Make a new key (paste it into the extension again)
   tether status        Show connected browsers, agents and shared tabs
   tether setup         Print the lines that add Tether to Claude Code and Codex
+  tether install-native [--chrome-id <id>...]
+                       Let Firefox-based browsers (Firefox, Zen, LibreWolf) start
+                       and reach Tether; also Chromium browsers when given their id
 `;
 
 switch (cmd) {
@@ -66,7 +69,15 @@ switch (cmd) {
     console.log(`  [mcp_servers.tether]\n  command = ${JSON.stringify(node)}\n  args = [${JSON.stringify(CLI)}]\n`);
     console.log("Any other MCP client: run this as a stdio server:");
     console.log(`  ${q(node)} ${q(CLI)}\n`);
-    console.log(`Pairing key for the extension: ${loadConfig().key}`);
+    console.log(`Pairing key for Chrome, Brave and Edge: ${loadConfig().key}\n`);
+    const { installNative } = await import("./install-native.js");
+    installNative();
+    break;
+  }
+  case "install-native": {
+    const { installNative } = await import("./install-native.js");
+    const i = rest.indexOf("--chrome-id");
+    installNative({ chromeIds: i >= 0 ? rest.slice(i + 1).filter((x) => !x.startsWith("--")) : [] });
     break;
   }
   default:
