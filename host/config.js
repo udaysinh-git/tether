@@ -5,6 +5,9 @@ import crypto from "node:crypto";
 
 export const HOME = process.env.TETHER_HOME || path.join(os.homedir(), ".tether");
 export const SCRIPTS_DIR = path.join(HOME, "scripts");
+export const STYLES_DIR = path.join(HOME, "styles");
+export const SITES_DIR = path.join(HOME, "sites");
+export const REQUESTS_DIR = path.join(HOME, "requests");
 const CONFIG_FILE = path.join(HOME, "config.json");
 
 const DEFAULTS = { port: 47821 };
@@ -22,7 +25,7 @@ function newKey() {
 }
 
 export function loadConfig() {
-  fs.mkdirSync(SCRIPTS_DIR, { recursive: true });
+  for (const d of [SCRIPTS_DIR, STYLES_DIR, SITES_DIR, REQUESTS_DIR]) fs.mkdirSync(d, { recursive: true });
   let cfg = {};
   try {
     cfg = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8"));

@@ -25,7 +25,20 @@ const state = {
   console: new Map(), // tabId -> [entries]
   userScripts: "unknown",
   bypass: false, // user-approved access to every tab, for this browser session
+  styles: [],
+  disabledStyles: new Set(), // style ids the user switched off in this browser
+  disabledScripts: new Set(), // script ids the user switched off in this browser
+  applied: new Map(), // tabId -> Map(styleId -> css) currently inserted
+  preview: new Map(), // tabId -> css the agent is previewing
+  recording: new Map(), // tabId -> { session, manual, host }
+  recPaused: new Set(), // tabs where the user stopped an automatic recording
+  autoRecord: new Set(), // hosts recorded on every visit
+  recordValues: true,
+  recQueue: [], // events waiting for the host
+  requests: [], // recent change requests, from the host
+  pendingRequests: [], // requests waiting for the host
 };
+const requestWaiters = new Map();
 const bypassWaiters = new Map(); // request id -> resolve
 
 let ws = null;
@@ -47,8 +60,20 @@ async function init() {
     } catch {}
   }
   state.bypass = !!(await api.storage.session.get("bypass")).bypass;
-  const local = await api.storage.local.get(["scripts"]);
+  const local = await api.storage.local.get(["scripts", "styles", "disabledStyles", "disabledScripts", "autoRecord", "recordValues", "recQueue", "pendingRequests", "requests"]);
+  state.disabledScripts = new Set(local.disabledScripts || []);
   state.scripts = local.scripts || [];
+  state.styles = local.styles || [];
+  state.disabledStyles = new Set(local.disabledStyles || []);
+  state.autoRecord = new Set(local.autoRecord || []);
+  state.recordValues = local.recordValues !== false;
+  state.recQueue = local.recQueue || [];
+  state.pendingRequests = local.pendingRequests || [];
+  state.requests = local.requests || [];
+  const rec = (await api.storage.session.get("recording")).recording || {};
+  for (const [id, v] of Object.entries(rec)) {
+    try { await api.tabs.get(Number(id)); state.recording.set(Number(id), v); } catch {}
+  }
   await checkUserScripts();
   for (const id of state.shared.keys()) {
     setBadge(id, true);
@@ -58,7 +83,7 @@ async function init() {
 }
 
 // The connection stays up while anything is shared or bypass mode is on.
-const active = () => state.shared.size > 0 || state.bypass;
+const active = () => state.shared.size > 0 || state.bypass || state.recording.size > 0 || state.recQueue.length > 0 || state.pendingRequests.length > 0;
 const allowed = (tabId) => state.shared.has(tabId) || state.bypass;
 
 async function settings() {
@@ -137,6 +162,8 @@ async function onHostMessage(sock, raw) {
     case "welcome":
       state.agents = msg.agents || [];
       setConn("connected");
+      flushRec();
+      flushRequests();
       clearInterval(pingTimer);
       pingTimer = setInterval(() => send({ type: "ping" }), 20000);
       updatePills();
@@ -155,6 +182,23 @@ async function onHostMessage(sock, raw) {
       await syncUserScripts();
       broadcast();
       break;
+    case "styles":
+      state.styles = msg.styles || [];
+      await api.storage.local.set({ styles: state.styles });
+      for (const t of await api.tabs.query({})) applyStyles(t.id, t.url);
+      broadcast();
+      break;
+    case "requests":
+      state.requests = msg.requests || [];
+      await api.storage.local.set({ requests: state.requests });
+      broadcast();
+      break;
+    case "importResult":
+    case "requestSaved": {
+      const w = requestWaiters.get(msg.nonce);
+      if (w) { requestWaiters.delete(msg.nonce); w(msg); }
+      break;
+    }
     case "activity":
       if (msg.tabId != null && state.shared.has(msg.tabId)) {
         state.activity.set(msg.tabId, { agent: msg.agent, summary: msg.summary, at: msg.at });
@@ -300,6 +344,13 @@ api.tabs.onCreated.addListener(async () => {
 
 api.tabs.onRemoved.addListener(async (tabId) => {
   await ready;
+  state.applied.delete(tabId);
+  state.preview.delete(tabId);
+  state.recPaused.delete(tabId);
+  if (state.recording.has(tabId)) {
+    state.recording.delete(tabId);
+    persistRec();
+  }
   if (state.shared.has(tabId)) {
     state.cdp.delete(tabId);
     unshare(tabId);
@@ -323,11 +374,189 @@ api.tabs.onActivated.addListener(async () => {
   if (active()) pushTabs();
 });
 
-api.webNavigation?.onCommitted.addListener(async (d) => {
+api.webNavigation.onCommitted.addListener(async (d) => {
   await ready;
-  if (d.frameId !== 0 || !state.shared.has(d.tabId)) return;
-  if (!state.cdp.has(d.tabId)) injectConsoleHook(d.tabId);
+  if (d.frameId !== 0) return;
+  // A new document: nothing we inserted survives.
+  state.applied.delete(d.tabId);
+  state.preview.delete(d.tabId);
+  applyStyles(d.tabId, d.url);
+  if (state.shared.has(d.tabId) && !state.cdp.has(d.tabId)) injectConsoleHook(d.tabId);
 });
+
+api.webNavigation.onDOMContentLoaded.addListener(async (d) => {
+  await ready;
+  if (d.frameId !== 0) return;
+  applyStyles(d.tabId, d.url); // in case the commit-time insert was too early
+  await autoRecordCheck(d.tabId, d.url);
+  if (state.recording.has(d.tabId)) {
+    await ensureContent(d.tabId).catch(() => {});
+    toContent(d.tabId, { cmd: "record", on: true, values: state.recordValues }, false).catch(() => {});
+  }
+});
+
+api.webNavigation.onHistoryStateUpdated.addListener(async (d) => {
+  await ready;
+  if (d.frameId !== 0) return;
+  applyStyles(d.tabId, d.url);
+  if (state.recording.has(d.tabId)) toContent(d.tabId, { cmd: "recNav" }, false).catch(() => {});
+});
+
+// ---------------------------------------------------------------- styles
+
+async function applyStyles(tabId, url) {
+  if (!url || !/^(https?|file):/.test(url)) return;
+  const want = new Map(
+    state.styles
+      .filter((s) => !state.disabledStyles.has(s.id))
+      .map((s) => [s.id, styleCss(s, url)])
+      .filter(([, css]) => css.trim())
+  );
+  const have = state.applied.get(tabId) || new Map();
+  for (const [id, css] of have) {
+    if (want.get(id) !== css) {
+      await api.scripting.removeCSS({ target: { tabId }, css }).catch(() => {});
+      have.delete(id);
+    }
+  }
+  for (const [id, css] of want) {
+    if (have.has(id)) continue;
+    try {
+      await api.scripting.insertCSS({ target: { tabId }, css });
+      have.set(id, css);
+    } catch {}
+  }
+  state.applied.set(tabId, have);
+}
+
+async function previewCss(tabId, css) {
+  const old = state.preview.get(tabId);
+  if (old) await api.scripting.removeCSS({ target: { tabId }, css: old }).catch(() => {});
+  state.preview.delete(tabId);
+  if (css) {
+    await api.scripting.insertCSS({ target: { tabId }, css });
+    state.preview.set(tabId, css);
+  }
+}
+
+// ---------------------------------------------------------------- recording
+
+const hostOf = (url) => { try { return new URL(url).host; } catch { return ""; } };
+
+async function persistRec() {
+  await api.storage.session.set({ recording: Object.fromEntries(state.recording) });
+}
+
+async function startRecording(tabId, manual) {
+  const tab = await api.tabs.get(tabId);
+  if (!shareable(tab.url)) throw new Error("Browser pages can't be recorded.");
+  state.recPaused.delete(tabId);
+  if (!state.recording.has(tabId)) {
+    state.recording.set(tabId, { session: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), manual, host: hostOf(tab.url), since: Date.now() });
+    await persistRec();
+  }
+  await ensureContent(tabId).catch(() => {});
+  await toContent(tabId, { cmd: "record", on: true, values: state.recordValues }, false).catch(() => {});
+  connect();
+  broadcast();
+}
+
+async function stopRecording(tabId) {
+  const r = state.recording.get(tabId);
+  if (!r) return;
+  state.recording.delete(tabId);
+  if (state.autoRecord.has(r.host)) state.recPaused.add(tabId);
+  await persistRec();
+  toContent(tabId, { cmd: "record", on: false }, false).catch(() => {});
+  flushRec();
+  if (!active()) disconnect();
+  broadcast();
+}
+
+async function autoRecordCheck(tabId, url) {
+  const host = hostOf(url);
+  const r = state.recording.get(tabId);
+  // Automatic sessions belong to one site; leaving it ends the session.
+  if (r && !r.manual && r.host !== host) await stopRecording(tabId);
+  if (!state.recording.has(tabId) && !state.recPaused.has(tabId) && state.autoRecord.has(host)) await startRecording(tabId, false).catch(() => {});
+}
+
+function queueRec(tabId, events) {
+  const r = state.recording.get(tabId);
+  if (!r) return;
+  for (const e of events) state.recQueue.push({ ...e, session: r.session });
+  if (state.recQueue.length > 20000) state.recQueue.splice(0, state.recQueue.length - 20000);
+  scheduleFlush();
+}
+
+let flushTimer;
+function scheduleFlush() {
+  clearTimeout(flushTimer);
+  flushTimer = setTimeout(flushRec, 1500);
+}
+
+async function flushRec() {
+  clearTimeout(flushTimer);
+  if (ws && ws.readyState === 1 && state.conn === "connected" && state.recQueue.length) {
+    while (state.recQueue.length) send({ type: "rec", events: state.recQueue.splice(0, 200) });
+  } else if (state.recQueue.length) {
+    connect();
+  }
+  await api.storage.local.set({ recQueue: state.recQueue });
+}
+
+// ---------------------------------------------------------------- change requests
+
+async function sendRequest(tabId, text, images) {
+  const tab = await api.tabs.get(tabId);
+  // The agent needs the tab to try changes on, so sending a request shares it.
+  if (shareable(tab.url) && !state.shared.has(tabId)) await share(tabId);
+  const request = { text, images, url: tab.url, title: tab.title, tabId };
+  state.pendingRequests.push(request);
+  await api.storage.local.set({ pendingRequests: state.pendingRequests });
+  connect();
+  const sent = await flushRequests(5000);
+  return { queued: !sent };
+}
+
+// Installing a .user.js / .user.css from the settings page. The host parses
+// and stores it, then pushes it back like any other script or style.
+async function importItem(text, filename) {
+  connect();
+  const end = Date.now() + 5000;
+  while (state.conn !== "connected" && Date.now() < end) await sleep(200);
+  if (state.conn !== "connected") throw new Error("The Tether host isn't running. Start your agent, or run “tether serve”, then try again.");
+  const nonce = Math.random().toString(36).slice(2);
+  const res = await new Promise((r) => {
+    requestWaiters.set(nonce, r);
+    setTimeout(() => r({ error: "The host didn't answer." }), 10000);
+    send({ type: "importItem", nonce, text, filename });
+  });
+  requestWaiters.delete(nonce);
+  if (res.error) throw new Error(res.error);
+  if (!active()) disconnect();
+  return res;
+}
+
+async function flushRequests(waitMs = 0) {
+  if (waitMs) {
+    const end = Date.now() + waitMs;
+    while (state.conn !== "connected" && Date.now() < end) await sleep(200);
+  }
+  if (!ws || ws.readyState !== 1 || state.conn !== "connected") return false;
+  while (state.pendingRequests.length) {
+    const request = state.pendingRequests[0];
+    const nonce = Math.random().toString(36).slice(2);
+    const ack = new Promise((r) => { requestWaiters.set(nonce, r); setTimeout(() => r(null), 10000); });
+    send({ type: "request", nonce, request });
+    const res = await ack;
+    if (!res || res.error) return false;
+    state.pendingRequests.shift();
+    await api.storage.local.set({ pendingRequests: state.pendingRequests });
+  }
+  broadcast();
+  return true;
+}
 
 // ---------------------------------------------------------------- content bridge
 
@@ -558,8 +787,23 @@ api.webRequest.onHeadersReceived.addListener(
   IS_FIREFOX ? ["responseHeaders", "blocking"] : ["responseHeaders"]
 );
 
+const recStarts = new Map(); // requestId -> start time, for recorded tabs
+api.webRequest.onBeforeRequest.addListener(
+  (d) => { if (d.tabId >= 0 && state.recording.has(d.tabId) && (d.type === "xmlhttprequest")) recStarts.set(d.requestId, d.timeStamp); },
+  { urls: ["<all_urls>"] }
+);
+function recordNet(d, error) {
+  const t0 = recStarts.get(d.requestId);
+  if (t0 == null) return;
+  recStarts.delete(d.requestId);
+  if (!state.recording.has(d.tabId)) return;
+  queueRec(d.tabId, [{ kind: "net", t: Date.now(), url: d.url, method: d.method, status: error ? undefined : d.statusCode, error, ms: Math.round(d.timeStamp - t0) }]);
+}
+api.webRequest.onErrorOccurred.addListener((d) => recordNet(d, d.error), { urls: ["<all_urls>"] });
+
 api.webRequest.onCompleted.addListener(
   (d) => {
+    recordNet(d);
     const rec = wrRecs.get(d.requestId);
     if (!rec) return;
     Object.assign(rec, { done: true, ms: Math.round(d.timeStamp - rec.started), fromCache: d.fromCache });
@@ -632,6 +876,14 @@ async function handleCall(method, p) {
       broadcast();
       return { id: t.id };
     }
+    case "runItem": {
+      const s = state.scripts.find((x) => x.id === p.id);
+      if (!s) throw new Error(`This browser doesn't have script ${p.id} yet.`);
+      return { value: await runJs(tabId, runnable(s, true)) };
+    }
+    case "previewCss":
+      await previewCss(tabId, p.css);
+      return {};
     case "requestBypass":
       return requestBypass(p.agent, p.reason);
     case "closeTab":
@@ -915,25 +1167,99 @@ async function checkUserScripts() {
   }
 }
 
+const RUN_AT = { "document-start": "document_start", "document-end": "document_end", "document-idle": "document_idle", "document-body": "document_end" };
+const validPattern = (m) => m === "<all_urls>" || /^(\*|https?|file|ftp):\/\/[^/]*\/.*$/.test(m);
+
 async function syncUserScripts() {
   await checkUserScripts();
   if (state.userScripts !== "ok") return;
   try {
     const existing = (await api.userScripts.getScripts()).map((s) => s.id).filter((id) => id.startsWith("tether-"));
     if (existing.length) await api.userScripts.unregister({ ids: existing });
-    const auto = state.scripts.filter((s) => s.run === "auto");
-    if (auto.length) {
-      await api.userScripts.register(
-        auto.map((s) => ({ id: "tether-" + s.id, matches: s.matches, js: [{ code: s.code }], runAt: "document_idle", world: "MAIN" }))
-      );
+  } catch {}
+  // One at a time, so one script with an odd pattern doesn't block the rest.
+  for (const s of state.scripts.filter((x) => x.run === "auto" && !state.disabledScripts.has(x.id))) {
+    const matches = s.matches.filter(validPattern);
+    const globs = s.includes.filter((g) => !g.startsWith("/"));
+    if (!matches.length && !globs.length) continue;
+    const reg = { id: "tether-" + s.id, matches: matches.length ? matches : ["<all_urls>"], js: [{ code: runnable(s, false) }], runAt: RUN_AT[s.runAt] || "document_idle", world: "MAIN" };
+    if (!matches.length) reg.includeGlobs = globs;
+    const exM = s.excludeMatches.filter(validPattern);
+    if (exM.length) reg.excludeMatches = exM;
+    const exG = s.excludes.filter((g) => !g.startsWith("/"));
+    if (exG.length) reg.excludeGlobs = exG;
+    try {
+      await api.userScripts.register([reg]);
+    } catch (e) {
+      console.warn(`Tether: could not register ${s.name}`, e);
     }
-  } catch (e) {
-    console.warn("Tether: could not register scripts", e);
   }
 }
 
+// Userscript @include/@exclude globs, and /regex/ forms.
+function globMatch(g, url) {
+  if (g.length > 2 && g.startsWith("/") && g.endsWith("/")) {
+    try { return new RegExp(g.slice(1, -1)).test(url); } catch { return false; }
+  }
+  const re = "^" + g.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\?/g, ".").replace(/\*/g, ".*").replace(/\\\.tld\b/g, "\\.[a-z.]+") + "$";
+  try { return new RegExp(re, "i").test(url); } catch { return false; }
+}
+
+function scriptMatches(s, url) {
+  const yes = s.matches.some((m) => matchPattern(m === "*://*/*" ? "<all_urls>" : m, url)) || s.includes.some((g) => globMatch(g, url));
+  return yes && !s.excludeMatches.some((m) => matchPattern(m, url)) && !s.excludes.some((g) => globMatch(g, url));
+}
+
 function scriptsFor(url) {
-  return state.scripts.filter((s) => s.matches.some((m) => matchPattern(m, url)));
+  return state.scripts.filter((s) => scriptMatches(s, url));
+}
+
+// UserCSS @-moz-document rules.
+function ruleMatch(r, url) {
+  if (r.fn === "url") return url === r.arg;
+  if (r.fn === "url-prefix") return url.startsWith(r.arg);
+  if (r.fn === "domain") {
+    let h;
+    try { h = new URL(url).hostname; } catch { return false; }
+    return h === r.arg || h.endsWith("." + r.arg);
+  }
+  if (r.fn === "regexp") {
+    try { return new RegExp("^(?:" + r.arg + ")$").test(url); } catch { return false; }
+  }
+  return false;
+}
+
+function styleCss(s, url) {
+  return s.sections.filter((sec) => !sec.rules.length || sec.rules.some((r) => ruleMatch(r, url))).map((sec) => sec.css).join("\n");
+}
+
+// What runs in the page: stand-ins for the GM_ API that userscripts expect,
+// then the script. Our own scripts return their body's result.
+function runnable(item, runNow) {
+  const key = JSON.stringify("tether:" + item.id + ":");
+  const info = JSON.stringify({ script: { name: item.name, version: item.version, namespace: item.namespace || "", description: item.description || "" }, scriptHandler: "Tether", version: api.runtime.getManifest().version });
+  const prelude = `var unsafeWindow = window;
+var GM_info = ${info};
+var GM_addStyle = function (css) { var s = document.createElement("style"); s.textContent = css; (document.head || document.documentElement).appendChild(s); return s; };
+var GM_getValue = function (k, d) { try { var v = localStorage.getItem(${key} + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } };
+var GM_setValue = function (k, v) { try { localStorage.setItem(${key} + k, JSON.stringify(v)); } catch (e) {} };
+var GM_deleteValue = function (k) { try { localStorage.removeItem(${key} + k); } catch (e) {} };
+var GM_listValues = function () { var out = []; try { for (var i = 0; i < localStorage.length; i++) { var k = localStorage.key(i); if (k.indexOf(${key}) === 0) out.push(k.slice(${key}.length)); } } catch (e) {} return out; };
+var GM_registerMenuCommand = function (name, fn) { return ${runNow ? "fn()" : "undefined"}; };
+var GM_unregisterMenuCommand = function () {};
+var GM_openInTab = function (url) { return window.open(url, "_blank"); };
+var GM_setClipboard = function (t) { try { navigator.clipboard.writeText(String(t)); } catch (e) {} };
+var GM_notification = function (o) { console.info("[" + GM_info.script.name + "]", typeof o === "string" ? o : o && o.text); };
+var GM_xmlhttpRequest = function (d) {
+  fetch(d.url, { method: d.method || "GET", headers: d.headers, body: d.data, credentials: d.anonymous ? "omit" : "include" })
+    .then(function (r) { return r.text().then(function (t) { var res = { status: r.status, statusText: r.statusText, responseText: t, response: t, finalUrl: r.url, readyState: 4, responseHeaders: "" }; if (d.onload) d.onload(res); if (d.onloadend) d.onloadend(res); }); })
+    .catch(function (e) { if (d.onerror) d.onerror(e); });
+};
+var GM = { info: GM_info, addStyle: GM_addStyle, openInTab: GM_openInTab, setClipboard: GM_setClipboard, notification: GM_notification, registerMenuCommand: GM_registerMenuCommand, xmlHttpRequest: GM_xmlhttpRequest,
+  getValue: function (k, d) { return Promise.resolve(GM_getValue(k, d)); }, setValue: function (k, v) { return Promise.resolve(GM_setValue(k, v)); },
+  deleteValue: function (k) { return Promise.resolve(GM_deleteValue(k)); }, listValues: function () { return Promise.resolve(GM_listValues()); } };`;
+  const inner = item.body !== undefined ? `return (function () {\n${item.body}\n})();` : `${item.code}\n;`;
+  return `(function () {\n${prelude}\n${inner}\n})()`;
 }
 
 function matchPattern(pattern, url) {
@@ -963,6 +1289,13 @@ async function popupState(tabId) {
   return {
     paired: !!s.key,
     bypass: state.bypass,
+    recordValues: state.recordValues,
+    recording: tab ? state.recording.get(tab.id) || null : null,
+    autoRecord: tab ? state.autoRecord.has(hostOf(tab.url)) : false,
+    host: tab ? hostOf(tab.url) : "",
+    styles: tab ? state.styles.filter((x) => styleCss(x, tab.url || "").trim()).map(({ id, name, description }) => ({ id, name, description, on: !state.disabledStyles.has(id) })) : [],
+    requests: tab ? state.requests.filter((r) => hostOf(r.url) === hostOf(tab.url)).slice(0, 3) : [],
+    pendingRequests: state.pendingRequests.length,
     port: s.port,
     trusted: s.trusted,
     conn: state.conn,
@@ -972,8 +1305,9 @@ async function popupState(tabId) {
     userScripts: state.userScripts,
     tab: tab && { id: tab.id, title: tab.title, url: tab.url, favIconUrl: tab.favIconUrl, shareable: shareable(tab.url), shared: state.shared.has(tab.id), by: state.shared.get(tab.id)?.by, cdp: state.cdp.has(tab.id), activity: state.activity.get(tab.id) },
     others: (await tabList()).filter((t) => t.id !== tabId).map((t) => ({ ...t, activity: state.activity.get(t.id) })),
-    scripts: tab ? scriptsFor(tab.url) : [],
-    allScripts: state.scripts,
+    scripts: tab ? scriptsFor(tab.url).map(({ id, name, description, run }) => ({ id, name, description, run, on: !state.disabledScripts.has(id) })) : [],
+    allScripts: state.scripts.map(({ id, name, description, run, matches, includes, version, body }) => ({ id, name, description, run, matches: matches.length ? matches : includes, version, imported: body === undefined, on: !state.disabledScripts.has(id) })),
+    allStyles: state.styles.map(({ id, name, description, matches, version, body, unsupported }) => ({ id, name, description, matches, version, imported: body === undefined, unsupported, on: !state.disabledStyles.has(id) })),
   };
 }
 
@@ -1003,6 +1337,39 @@ api.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (state.bypass) await setBypass(false);
         for (const id of [...state.shared.keys()]) await unshare(id);
         return { ok: true };
+      case "startRec":
+        await startRecording(msg.tabId, true);
+        return { ok: true };
+      case "stopRec":
+        await stopRecording(msg.tabId);
+        return { ok: true };
+      case "setAutoRecord": {
+        msg.on ? state.autoRecord.add(msg.host) : state.autoRecord.delete(msg.host);
+        await api.storage.local.set({ autoRecord: [...state.autoRecord] });
+        if (msg.tabId != null) {
+          if (msg.on) await startRecording(msg.tabId, false);
+          else if (state.recording.get(msg.tabId)?.manual === false) await stopRecording(msg.tabId);
+        }
+        broadcast();
+        return { ok: true };
+      }
+      case "setRecordValues":
+        state.recordValues = !!msg.on;
+        await api.storage.local.set({ recordValues: state.recordValues });
+        broadcast();
+        return { ok: true };
+      case "toggleStyle": {
+        msg.on ? state.disabledStyles.delete(msg.id) : state.disabledStyles.add(msg.id);
+        await api.storage.local.set({ disabledStyles: [...state.disabledStyles] });
+        for (const t of await api.tabs.query({})) applyStyles(t.id, t.url);
+        broadcast();
+        return { ok: true };
+      }
+      case "sendRequest":
+        return sendRequest(msg.tabId, msg.text, msg.images || []);
+      case "rec":
+        if (sender.tab) queueRec(sender.tab.id, msg.events || []);
+        return { ok: true };
       case "setBypass":
         await setBypass(msg.on);
         return { ok: true };
@@ -1027,7 +1394,20 @@ api.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       case "runScript": {
         const s = state.scripts.find((x) => x.id === msg.id);
         if (!s) throw new Error("Script not found");
-        return { value: await runJs(msg.tabId, s.code) };
+        return { value: await runJs(msg.tabId, runnable(s, true)) };
+      }
+      case "toggleScript":
+        msg.on ? state.disabledScripts.delete(msg.id) : state.disabledScripts.add(msg.id);
+        await api.storage.local.set({ disabledScripts: [...state.disabledScripts] });
+        await syncUserScripts();
+        broadcast();
+        return { ok: true };
+      case "importItem":
+        return importItem(msg.text, msg.filename);
+      case "exportItem": {
+        const item = [...state.scripts, ...state.styles].find((x) => x.id === msg.id && x.kind === msg.kind);
+        if (!item) throw new Error("Not found");
+        return { code: item.code, filename: item.id + (item.kind === "style" ? ".user.css" : ".user.js") };
       }
       case "recheckScripts":
         await syncUserScripts();
@@ -1035,15 +1415,18 @@ api.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return { ok: true };
       // from content scripts
       case "heartbeat":
-        return { shared: state.shared.has(sender.tab?.id) };
+        return { shared: state.shared.has(sender.tab?.id), recording: state.recording.has(sender.tab?.id) };
       case "stop":
-        if (sender.tab) await unshare(sender.tab.id);
+        if (sender.tab) {
+          await stopRecording(sender.tab.id);
+          await unshare(sender.tab.id);
+        }
         return { ok: true };
       case "console":
         if (sender.tab && state.shared.has(sender.tab.id) && !state.cdp.has(sender.tab.id)) pushConsole(sender.tab.id, msg.entry);
         return { ok: true };
       case "pillState":
-        return { shared: state.shared.has(sender.tab?.id), agents: state.agents, conn: state.conn, activity: state.activity.get(sender.tab?.id) };
+        return { shared: state.shared.has(sender.tab?.id), agents: state.agents, conn: state.conn, activity: state.activity.get(sender.tab?.id), recording: state.recording.has(sender.tab?.id) ? { values: state.recordValues } : null };
     }
   })().then(
     (r) => sendResponse(r),

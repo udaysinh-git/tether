@@ -15,7 +15,7 @@ const home = fs.mkdtempSync(path.join(os.tmpdir(), "tether-test-"));
 const PORT = 47899;
 const env = { ...process.env, TETHER_HOME: home, TETHER_PORT: String(PORT) };
 const ok = (c, m) => {
-  if (!c) { console.error("FAIL:", m); process.exitCode = 1; } else console.log("ok  ", m);
+  if (!c) { console.error("FAIL:", m, "\n   last output:", String(globalThis.lastOut || "").slice(0, 900).replace(/\n/g, "\n   ")); process.exitCode = 1; } else console.log("ok  ", m);
 };
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -87,7 +87,9 @@ const client = new Client({ name: "claude-code", version: "test" });
 await client.connect(new StdioClientTransport({ command: process.execPath, args: [path.join(root, "host", "cli.js")], env, stderr: "inherit" }));
 const call = async (name, args = {}) => {
   const r = await client.callTool({ name, arguments: args });
-  return { text: r.content.map((c) => c.text ?? `[${c.type}]`).join("\n"), r };
+  const out = { text: r.content.map((c) => c.text ?? `[${c.type}]`).join("\n"), r };
+  globalThis.lastOut = `${name}: ${out.text}`;
+  return out;
 };
 
 try {
@@ -153,10 +155,75 @@ try {
   t = await call("screenshot", { tab: handle });
   ok(t.r.content?.[0]?.type === "image", "screenshot of a named tab");
 
-  await call("save_script", { name: "Fill test", matches: [site + "/*"], code: "document.querySelector('input[name=email]').value = 'from-script'; 'filled'" });
-  ok(fs.existsSync(path.join(home, "scripts", "fill-test.js")), "script saved to disk");
+  // ---- scripts, in Tampermonkey's format
+  await call("save_script", { name: "Fill test", matches: [site + "/*"], code: "document.querySelector('input[name=email]').value = 'from-script';\nreturn 'filled';" });
+  const scriptFile = path.join(home, "scripts", "fill-test.user.js");
+  ok(fs.existsSync(scriptFile) && /==UserScript==[\s\S]*@match\s+http[\s\S]*@grant\s+GM_registerMenuCommand/.test(fs.readFileSync(scriptFile, "utf8")), "script saved as a Tampermonkey userscript");
+  await wait(300);
   t = await call("run_script", { tab: handle, name: "Fill test" });
-  ok(/filled/.test(t.text), "script runs");
+  ok(/filled/.test(t.text), "script runs and returns its result");
+
+  // A script downloaded from elsewhere, using GM_ storage.
+  t = await call("install_userscript", { text: `// ==UserScript==\n// @name GM test\n// @include ${site}/*\n// @grant GM_setValue\n// @grant GM_getValue\n// ==/UserScript==\nGM_setValue("n", 41);\nwindow.gmResult = GM_getValue("n") + 1;` });
+  ok(/Installed script "GM test"/.test(t.text), "foreign userscript installs");
+  await wait(300);
+  await call("run_script", { tab: handle, name: "GM test" });
+  t = await call("run_js", { tab: handle, code: "window.gmResult" });
+  ok(t.text.trim() === "42", "GM_setValue/GM_getValue work");
+
+  // ---- styles, as UserCSS
+  const h1Color = async () => (await call("run_js", { tab: handle, code: "getComputedStyle(document.querySelector('h1')).color" })).text;
+  await call("apply_css", { tab: handle, css: "h1 { color: rgb(9, 9, 9) !important; }" });
+  ok((await h1Color()).includes("rgb(9, 9, 9)"), "apply_css previews");
+  await call("clear_preview", { tab: handle });
+  ok(!(await h1Color()).includes("rgb(9, 9, 9)"), "clear_preview removes it");
+  await call("save_style", { name: "Calm test", matches: [site + "/*"], css: "h1 { color: rgb(1, 2, 3) !important; }" });
+  const styleFile = path.join(home, "styles", "calm-test.user.css");
+  ok(fs.existsSync(styleFile) && /==UserStyle==[\s\S]*@-moz-document url-prefix\("http:\/\/127\.0\.0\.1/.test(fs.readFileSync(styleFile, "utf8")), "style saved as UserCSS");
+  await wait(800);
+  ok((await h1Color()).includes("rgb(1, 2, 3)"), "saved style applies to the open tab");
+  await sw.evaluate(async () => { state.disabledStyles.add("calm-test"); for (const t of await chrome.tabs.query({})) await applyStyles(t.id, t.url); });
+  ok(!(await h1Color()).includes("rgb(1, 2, 3)"), "switching a style off removes it");
+  await sw.evaluate(async () => { state.disabledStyles.delete("calm-test"); for (const t of await chrome.tabs.query({})) await applyStyles(t.id, t.url); });
+  await tab.reload();
+  await wait(1200);
+  ok((await h1Color()).includes("rgb(1, 2, 3)"), "style applies again after a reload");
+
+  // ---- recording: the user clicks and types, the agent reads the site map
+  await sw.evaluate((id) => startRecording(id, true), tabId);
+  await wait(800);
+  await tab.fill("input[name=email]", "rec@example.com");
+  await tab.click("text=Create account");
+  await tab.waitForSelector("text=Saved rec@example.com");
+  await wait(2500);
+  await sw.evaluate((id) => stopRecording(id), tabId);
+  await wait(800);
+  const hostKey = new URL(site).host;
+  t = await call("site_list");
+  ok(t.text.includes(hostKey.replace(":", "_")), "recorded site is listed");
+  t = await call("site_map", { site: hostKey });
+  ok(/button "Create account"/.test(t.text) && /POST \/api/.test(t.text) && /textbox "Email"/.test(t.text), "site map has the clicked button, the field and the API call");
+  t = await call("site_map", { site: hostKey, page: "/" });
+  ok(/Latest outline/.test(t.text) && /Sign up/.test(t.text), "site map has the page outline");
+  t = await call("site_sessions", { site: hostKey });
+  const sid = t.text.split(/\s+/)[0];
+  t = await call("site_sessions", { site: hostKey, session: sid });
+  ok(/type\s+textbox "Email".*= "rec@example.com"/.test(t.text) && /submit/.test(t.text), "session timeline has typing and submit");
+  await call("site_notes", { site: hostKey, text: "Sign-up form posts to /api." });
+  t = await call("site_map", { site: hostKey });
+  ok(t.text.includes("Sign-up form posts to /api."), "notes show in the site map");
+
+  // ---- change request from the popup, with an image
+  const png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+  const sent = await sw.evaluate(({ id, png }) => sendRequest(id, "Make this page dark and calm", [{ name: "ref.png", dataUrl: png }]), { id: tabId, png });
+  ok(sent && sent.queued === false, "request reaches the host");
+  t = await call("get_requests");
+  ok(t.text.includes("Make this page dark and calm") && t.r.content.some((c) => c.type === "image"), "agent gets the request text and image");
+  const reqId = t.text.match(/Request (\S+)/)[1];
+  await call("resolve_request", { id: reqId, reply: "Added the Calm test style." });
+  await wait(500);
+  const reqs = await sw.evaluate(() => state.requests);
+  ok(reqs.some((r) => r.id === reqId && r.status === "done" && r.reply.includes("Calm test")), "reply shows up in the extension");
 
   // Bypass: answer the prompt as the user would.
   const promptPage = ctx.waitForEvent("page", { predicate: (p) => p.url().includes("prompt.html"), timeout: 15000 });

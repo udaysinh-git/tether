@@ -131,6 +131,7 @@ function scriptsSection() {
             <p class="sub">${esc(s.description || (s.run === "auto" ? "Runs on every visit" : "Run when you need it"))}</p>
           </div>
           <button class="quiet" data-act="run" data-id="${esc(s.id)}">Run</button>
+          ${s.run === "auto" ? `<button class="switch small" role="switch" aria-checked="${s.on}" aria-label="Run ${esc(s.name)} on every visit" title="Run on every visit" data-act="scriptToggle" data-id="${esc(s.id)}" data-on="${!s.on}"></button>` : ""}
         </div>
         ${scriptResult?.id === s.id ? `<p class="result">${esc(scriptResult.text)}</p>` : ""}`
         )
@@ -158,11 +159,165 @@ function footer() {
     </footer>`;
 }
 
+function requestsSection() {
+  const t = st.tab;
+  if (!st.paired || !t?.shareable) return "";
+  const rows = st.requests
+    .map(
+      (r) => `
+      <div class="row req">
+        <span class="dot ${r.status === "done" ? "off" : ""}"></span>
+        <div class="grow">
+          <p class="name">${esc(r.text || "(images only)")}</p>
+          <p class="sub ${r.status === "done" ? "done" : ""}">${r.status === "done" ? esc(r.reply || "Done.") : `Waiting for your agent${r.images ? ` · ${r.images} image${r.images === 1 ? "" : "s"}` : ""} · ${ago(r.created)}`}</p>
+        </div>
+      </div>`
+    )
+    .join("");
+  const pending = st.pendingRequests ? `<p class="faint" style="padding:0 8px">${st.pendingRequests} request${st.pendingRequests === 1 ? "" : "s"} will send when the host is running.</p>` : "";
+  return `
+    <section class="section">
+      <h2 style="display:flex;justify-content:space-between;align-items:center;padding-right:0">Changes for this site
+        ${composer.open ? "" : `<button class="quiet" data-act="compose">Request a change</button>`}</h2>
+      ${rows}${pending}
+    </section>`;
+}
+
+function stylesSection() {
+  if (!st.styles.length) return "";
+  return `
+    <section class="section">
+      <h2>Styles on this site</h2>
+      ${st.styles
+        .map(
+          (s) => `
+        <div class="toggle-row">
+          <div class="grow">
+            <p class="name">${esc(s.name)}</p>
+            ${s.description ? `<p class="sub faint">${esc(s.description)}</p>` : ""}
+          </div>
+          <button class="switch small" role="switch" aria-checked="${s.on}" aria-label="${esc(s.name)}" data-act="style" data-id="${esc(s.id)}" data-on="${!s.on}"></button>
+        </div>`
+        )
+        .join("")}
+    </section>`;
+}
+
+function recordSection() {
+  const t = st.tab;
+  if (!st.paired || !t?.shareable) return "";
+  const r = st.recording;
+  const status = r
+    ? `<p><span class="dot rec-dot" style="margin-right:8px"></span>Recording this visit</p><p class="faint">Started ${ago(r.since)}. Clicks, typing and page structure go to ~/.tether/sites/${esc(st.host)}.</p>`
+    : `<p>Record this visit</p><p class="faint">Saves what you click and type and how the pages are built, so agents learn the site. No video.</p>`;
+  return `
+    <section class="bypass" style="padding-top:4px">
+      <div class="grow">${status}</div>
+      <button data-act="${r ? "stopRec" : "startRec"}">${r ? "Stop" : "Record"}</button>
+    </section>
+    <div class="toggle-row">
+      <p class="grow faint">Always record on ${esc(st.host)}</p>
+      <button class="switch small" role="switch" aria-checked="${st.autoRecord}" aria-label="Always record on ${esc(st.host)}" data-act="autoRec" data-on="${!st.autoRecord}"></button>
+    </div>`;
+}
+
 function render() {
   renderStatus();
   const err = st.conn === "denied" && st.connError ? `<p class="error" style="padding:0 4px">${esc(st.connError)}</p>` : "";
-  app.innerHTML = (st.paired ? tabCard() : pairCard()) + err + othersSection() + scriptsSection() + (st.paired ? bypassRow() : "") + footer();
+  document.getElementById("top").innerHTML = (st.paired ? tabCard() : pairCard()) + err + requestsSection();
+  document.getElementById("rest").innerHTML = othersSection() + stylesSection() + scriptsSection() + recordSection() + (st.paired ? bypassRow() : "") + footer();
 }
+
+// ---------------------------------------------------------------- composer
+// Lives outside the re-rendered parts so typing isn't interrupted by updates.
+
+const composer = { open: false, images: [], sending: false };
+const composerEl = document.getElementById("composer");
+
+function openComposer() {
+  composer.open = true;
+  composerEl.hidden = false;
+  composerEl.innerHTML = `
+    <textarea id="reqText" placeholder="What should change? For a new look, paste or drop screenshots or mockups and say what you like about them."></textarea>
+    <div class="thumbs" id="thumbs"></div>
+    <div class="bar">
+      <label class="attach">Add images<input id="reqFiles" type="file" accept="image/*" multiple /></label>
+      <span class="grow"></span>
+      <button class="quiet" data-act="cancelReq">Cancel</button>
+      <button class="primary" data-act="sendReq">Send</button>
+    </div>
+    <p class="faint">Sending shares this tab so your agent can try changes on it.</p>`;
+  document.getElementById("reqText").focus();
+  document.getElementById("reqFiles").addEventListener("change", (e) => addImages([...e.target.files]));
+  render();
+}
+
+function closeComposer() {
+  composer.open = false;
+  composer.images = [];
+  composerEl.hidden = true;
+  composerEl.innerHTML = "";
+  render();
+}
+
+function renderThumbs() {
+  document.getElementById("thumbs").innerHTML = composer.images
+    .map((img, i) => `<div class="thumb"><img src="${img.dataUrl}" alt="${esc(img.name)}" /><button type="button" data-act="dropImg" data-i="${i}" aria-label="Remove ${esc(img.name)}">×</button></div>`)
+    .join("");
+}
+
+// Large screenshots are scaled to 1600px on the long side to keep requests small.
+async function toDataUrl(file) {
+  const bmp = await createImageBitmap(file);
+  const scale = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+  const c = new OffscreenCanvas(Math.round(bmp.width * scale), Math.round(bmp.height * scale));
+  c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
+  const blob = await c.convertToBlob(file.type === "image/png" && file.size < 1.5e6 ? { type: "image/png" } : { type: "image/jpeg", quality: 0.86 });
+  return new Promise((r) => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(blob); });
+}
+
+async function addImages(files) {
+  for (const f of files.filter((f) => f.type.startsWith("image/")).slice(0, 8 - composer.images.length)) {
+    composer.images.push({ name: f.name || "pasted image", dataUrl: await toDataUrl(f) });
+  }
+  renderThumbs();
+}
+
+composerEl.addEventListener("paste", (e) => {
+  const files = [...(e.clipboardData?.files || [])];
+  if (files.length) { e.preventDefault(); addImages(files); }
+});
+composerEl.addEventListener("dragover", (e) => { e.preventDefault(); composerEl.classList.add("drag"); });
+composerEl.addEventListener("dragleave", () => composerEl.classList.remove("drag"));
+composerEl.addEventListener("drop", (e) => {
+  e.preventDefault();
+  composerEl.classList.remove("drag");
+  addImages([...e.dataTransfer.files]);
+});
+
+async function sendComposer(button) {
+  const text = document.getElementById("reqText").value.trim();
+  if (!text && !composer.images.length) return document.getElementById("reqText").focus();
+  button.disabled = true;
+  button.textContent = "Sending…";
+  try {
+    const r = await send({ type: "sendRequest", tabId, text, images: composer.images });
+    closeComposer();
+    if (r.queued) alert("Saved. It will reach your agent once the Tether host is running.");
+  } catch (err) {
+    button.disabled = false;
+    button.textContent = "Send";
+    alert(err.message);
+  }
+}
+
+composerEl.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-act]");
+  if (!b) return;
+  if (b.dataset.act === "cancelReq") closeComposer();
+  if (b.dataset.act === "sendReq") sendComposer(b);
+  if (b.dataset.act === "dropImg") { composer.images.splice(Number(b.dataset.i), 1); renderThumbs(); }
+});
 
 async function refresh() {
   st = await send({ type: "state", tabId });
@@ -184,7 +339,7 @@ app.addEventListener("submit", async (e) => {
 
 app.addEventListener("click", async (e) => {
   const b = e.target.closest("[data-act]");
-  if (!b) return;
+  if (!b || composerEl.contains(b)) return;
   e.preventDefault();
   const id = Number(b.dataset.id);
   b.disabled = true;
@@ -205,6 +360,24 @@ app.addEventListener("click", async (e) => {
         break;
       case "bypass":
         await send({ type: "setBypass", on: !st.bypass });
+        break;
+      case "compose":
+        openComposer();
+        return;
+      case "style":
+        await send({ type: "toggleStyle", id: b.dataset.id, on: b.dataset.on === "true" });
+        break;
+      case "scriptToggle":
+        await send({ type: "toggleScript", id: b.dataset.id, on: b.dataset.on === "true" });
+        break;
+      case "startRec":
+        await send({ type: "startRec", tabId });
+        break;
+      case "stopRec":
+        await send({ type: "stopRec", tabId });
+        break;
+      case "autoRec":
+        await send({ type: "setAutoRecord", host: st.host, on: b.dataset.on === "true", tabId });
         break;
       case "focus":
         await api.tabs.update(id, { active: true });

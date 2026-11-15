@@ -37,10 +37,37 @@
       </section>
 
       <section>
+        <h2>Recording</h2>
+        <div class="line">
+          <div class="grow">
+            <p>Record what you type</p>
+            <p class="faint">Passwords, card numbers, one-time codes and similar fields are always masked. Turn this off to record only that a field was filled.</p>
+          </div>
+          <button id="recValues" class="switch" role="switch" aria-checked="true" aria-label="Record what you type"></button>
+        </div>
+        <div id="autoSites"></div>
+        <p class="faint">Recordings are saved in <span class="cmd">~/.tether/sites</span>, one folder per site. Delete a folder to forget a site.</p>
+      </section>
+
+      <section>
+        <h2>Styles</h2>
+        <div id="styles"></div>
+      </section>
+
+      <section>
         <h2>Scripts</h2>
         <p id="usStatus" class="muted"></p>
         <div id="scripts"></div>
-        <p class="faint">Agents save scripts with the save_script tool. They live as plain files in <span class="cmd">~/.tether/scripts</span>, so you can edit or delete them there too.</p>
+        <p class="faint">Scripts are ordinary userscripts in <span class="cmd">~/.tether/scripts</span> and styles are UserCSS in <span class="cmd">~/.tether/styles</span>. Download one to install it in Tampermonkey, Violentmonkey or Stylus, or share it.</p>
+      </section>
+
+      <section>
+        <h2>Install</h2>
+        <div class="line" style="align-items:center">
+          <p class="grow muted">Add a .user.js or .user.css file you downloaded, for example from Greasy Fork or userstyles.world.</p>
+          <label class="primary" style="padding:8px 12px;border-radius:8px;cursor:pointer">Choose file<input id="installFile" type="file" accept=".js,.css" multiple hidden /></label>
+        </div>
+        <p id="installResult" class="faint"></p>
       </section>
     </main>
     <script src="options.js" type="module"></script>

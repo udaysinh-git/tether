@@ -37,7 +37,7 @@ await tab.goto(site);
 const tabId = await sw.evaluate(async (u) => (await chrome.tabs.query({ url: u + "/*" }))[0].id, site);
 
 // Open the popup as a page that thinks the test tab is active.
-async function popup(name, setup) {
+async function popup(name, setup, after) {
   if (setup) await setup();
   const p = await ctx.newPage();
   await p.setViewportSize({ width: 360, height: 520 });
@@ -47,6 +47,7 @@ async function popup(name, setup) {
   }, tabId);
   await p.goto(`chrome-extension://${extId}/popup/popup.html`);
   await wait(400);
+  if (after) await after(p);
   const h = await p.evaluate(() => document.body.scrollHeight);
   await p.setViewportSize({ width: 360, height: h });
   await p.screenshot({ path: path.join(out, `popup-${name}.png`) });
@@ -62,8 +63,20 @@ await popup("shared", async () => {
     state.agents = ["Claude Code"];
     state.conn = "connected";
     state.activity.set(id, { agent: "Claude Code", summary: "clicked “New invoice”", at: Date.now() - 4000 });
-    state.scripts = [{ id: "export-csv", name: "Export open invoices", description: "Downloads this month's open invoices as CSV", matches: ["<all_urls>"], run: "manual" }];
+    const script = (o) => ({ matches: ["*://*/*"], includes: [], excludes: [], excludeMatches: [], version: "1.0.0", ...o });
+    state.scripts = [
+      script({ id: "export-csv", name: "Export open invoices", description: "Downloads this month's open invoices as CSV", run: "manual" }),
+      script({ id: "hide-promos", name: "Hide upgrade banners", description: "", run: "auto" }),
+    ];
+    state.styles = [{ id: "calm-ledger", name: "Calm Ledgerly", description: "Dark, low-contrast tables", sections: [{ rules: [], css: "h1{}" }], matches: [] }];
+    state.requests = [{ id: "r1", text: "Make the invoice table dark and easier on the eyes, like the screenshot", url: location.href, status: "done", reply: "Added the Calm Ledgerly style. Switch it off below.", created: Date.now() - 600000, images: 1 }];
+    state.requests[0].url = (await chrome.tabs.get(id)).url;
+    await startRecording(id, true);
   }, tabId);
+});
+await popup("composer", null, async (p) => {
+  await p.click("text=Request a change");
+  await p.fill("#reqText", "Make this look like the attached screenshot: dark sidebar, bigger totals.");
 });
 await tab.bringToFront();
 await sw.evaluate((id) => chrome.tabs.sendMessage(id, { cmd: "activity", agent: "Claude Code", summary: "clicked “New invoice”", agents: ["Claude Code"] }), tabId);

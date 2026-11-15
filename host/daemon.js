@@ -7,7 +7,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { loadConfig, safeEqual } from "./config.js";
 import { Hub } from "./hub.js";
 import { registerTools } from "./tools.js";
-import { watchScripts } from "./scripts.js";
+import { watchAll } from "./scripts.js";
 
 const VERSION = "0.1.0";
 const IDLE_EXIT_MS = 30 * 60 * 1000;
@@ -22,7 +22,7 @@ export async function serve({ quiet = false } = {}) {
   const sessions = new Map(); // sessionId -> { transport, server, name }
   const hosts = new Set([`127.0.0.1:${cfg.port}`, `localhost:${cfg.port}`]);
 
-  watchScripts(() => hub.pushScripts());
+  watchAll(() => hub.pushScripts());
 
   const server = http.createServer(async (req, res) => {
     // Refuse anything a web page could send: wrong Host (DNS rebinding) or any Origin.
@@ -63,7 +63,7 @@ export async function serve({ quiet = false } = {}) {
           { name: "tether", version: VERSION },
           {
             instructions:
-              "Tether gives you the user's real, logged-in browser tabs. You can only use tabs the user shared by clicking the Tether button (and tabs those pages open), unless they approve bypass mode. Start with list_tabs, then snapshot to read the page and get element refs. Act with click, type, fill_form; each action returns a fresh snapshot. Use network_requests and console_messages to debug. Ask before submitting payments, sending messages or deleting anything.",
+              "Tether gives you the user's real, logged-in browser tabs. You can only use tabs the user shared by clicking the Tether button (and tabs those pages open), unless they approve bypass mode. Start with list_tabs, then snapshot to read the page and get element refs. Act with click, type, fill_form; each action returns a fresh snapshot. Use network_requests and console_messages to debug. The user can send you change requests (text and images) from the Tether popup: read them with get_requests. To restyle a site, preview with apply_css, check with screenshot, then save_style; use save_script for behaviour. Before working on a site, site_map shows what Tether recorded about how the user uses it. Ask before submitting payments, sending messages or deleting anything.",
           }
         );
         registerTools(mcp, hub, () => entry.name);

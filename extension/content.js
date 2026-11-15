@@ -527,6 +527,7 @@
           -webkit-font-smoothing: antialiased;
         }
         .dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: #e8a33d; }
+        .dot.rec { background: #e0806b; }
         .lines { min-width: 0; }
         .t { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .s { color: #a9a49b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -556,14 +557,24 @@
     pillSub = pillRoot.querySelector(".s");
     hl = pillRoot.querySelector(".hl");
     pillRoot.querySelector("button").addEventListener("click", () => api.runtime.sendMessage({ type: "stop" }));
+    pillRoot.querySelector("button").title = "Stop sharing and recording this tab";
     (document.body || document.documentElement).appendChild(pillHost);
     renderPill();
   }
 
+  let shared = false;
+  let recording = false;
+
   function renderPill() {
     if (!pillText) return;
-    pillText.textContent = agents.length ? `Shared with ${agents.join(" and ")}` : "Shared, waiting for an agent";
-    pillSub.textContent = lastActivity;
+    if (shared) {
+      pillText.textContent = (agents.length ? `Shared with ${agents.join(" and ")}` : "Shared, waiting for an agent") + (recording ? " · recording" : "");
+      pillSub.textContent = lastActivity;
+    } else {
+      pillText.textContent = "Recording this visit";
+      pillSub.textContent = "Clicks, typing and page structure, for your agent";
+    }
+    pillRoot.querySelector(".dot").classList.toggle("rec", recording && !shared);
   }
 
   function setActivity(text) {
@@ -579,11 +590,200 @@
     requestAnimationFrame(() => requestAnimationFrame(() => hl.classList.remove("on")));
   }
 
-  function removeAll() {
-    pillHost?.remove();
-    pillHost = null;
-    pillText = null;
-    clearInterval(beat);
+  function updatePill() {
+    if (shared || recording) {
+      ensurePill();
+      renderPill();
+    } else {
+      pillHost?.remove();
+      pillHost = null;
+      pillText = null;
+    }
+  }
+
+  // ------------------------------------------------------------ recorder
+  // Records what the user does (not video): clicks, typing, choices, submits,
+  // shortcut keys, and the page outline when it changes. Sensitive fields are
+  // masked. Events go to the background, which files them per site.
+
+  const rec = { values: true, queue: [], flushTimer: null, obs: null, mut: 0, snapTimer: null, lastHash: "" };
+  const SENSITIVE = /pass|card|cvv|cvc|csc|otp|\bpin\b|ssn|secret|token|iban|account.?num|security.?code/i;
+
+  function isSensitive(el) {
+    const ty = (el.type || "").toLowerCase();
+    if (ty === "password") return true;
+    if (/cc-|one-time-code|password/.test(el.getAttribute?.("autocomplete") || "")) return true;
+    const hay = [el.name, el.id, el.getAttribute?.("aria-label"), el.getAttribute?.("placeholder"), el.labels?.[0]?.innerText].filter(Boolean).join(" ");
+    return SENSITIVE.test(hay);
+  }
+
+  function uniqueIn(root, sel) {
+    try { return root.querySelectorAll(sel).length === 1; } catch { return false; }
+  }
+
+  const stableId = (id) => id && id.length < 60 && !/\d{3,}|^[a-f0-9-]{10,}$|:|^ember|^react|^radix|^headlessui|^mui-/i.test(id);
+  const attrSel = (tag, a, v) => `${tag}[${a}="${v.replace(/["\\]/g, "\\$&")}"]`;
+
+  function selectorFor(el) {
+    const root = el.getRootNode().querySelectorAll ? el.getRootNode() : document;
+    const tag = el.tagName.toLowerCase();
+    if (stableId(el.id) && uniqueIn(root, "#" + CSS.escape(el.id))) return "#" + CSS.escape(el.id);
+    for (const a of ["data-testid", "data-test", "data-qa", "data-cy", "name", "aria-label", "title", "placeholder", "href"]) {
+      const v = el.getAttribute(a);
+      if (v && v.length < 100 && !v.startsWith("javascript:")) {
+        const s = attrSel(tag, a, v);
+        if (uniqueIn(root, s)) return s;
+      }
+    }
+    const parts = [];
+    let cur = el;
+    while (cur && cur.nodeType === 1 && parts.length < 6) {
+      if (cur !== el && stableId(cur.id)) { parts.unshift("#" + CSS.escape(cur.id)); break; }
+      let part = cur.tagName.toLowerCase();
+      const sibs = cur.parentElement ? [...cur.parentElement.children].filter((c) => c.tagName === cur.tagName) : [];
+      if (sibs.length > 1) part += `:nth-of-type(${sibs.indexOf(cur) + 1})`;
+      parts.unshift(part);
+      if (uniqueIn(root, parts.join(" > "))) break;
+      cur = cur.parentElement;
+    }
+    return parts.join(" > ");
+  }
+
+  function contextOf(el) {
+    const box = el.closest("form,dialog,[role=dialog],fieldset,section,article,nav,aside,header,footer,li,tr,[role=row],[role=listitem],[role=menu]");
+    if (!box) return "";
+    const label = box.getAttribute("aria-label") || box.querySelector("h1,h2,h3,h4,legend,[role=heading]")?.innerText || (box.tagName === "TR" ? box.cells?.[0]?.innerText : "");
+    return clip(label || "", 60);
+  }
+
+  function describeTarget(el) {
+    const r = el.getBoundingClientRect();
+    // A form's text is all of its fields; name it by its label or heading instead.
+    const name = el.tagName === "FORM" ? el.getAttribute("aria-label") || el.getAttribute("name") || el.querySelector("h1,h2,h3,legend")?.innerText || contextOf(el) || el.id || "" : nameOf(el);
+    const d = { role: role(el) || el.getAttribute("role") || el.tagName.toLowerCase(), name: clip(name, 80), tag: el.tagName.toLowerCase(), selector: selectorFor(el) };
+    const href = el.getAttribute("href");
+    if (href && !href.startsWith("javascript:")) d.href = clip(href, 200);
+    const ctx = contextOf(el);
+    if (ctx) d.context = ctx;
+    d.rect = [Math.round(r.left + scrollX), Math.round(r.top + scrollY), Math.round(r.width), Math.round(r.height)];
+    return d;
+  }
+
+  const ACTIONABLE = "a[href],button,input,select,textarea,summary,label,[role=button],[role=link],[role=tab],[role=menuitem],[role=option],[role=checkbox],[role=switch],[onclick],[contenteditable=''],[contenteditable=true]";
+
+  function fromPill(e) {
+    return pillHost && e.composedPath().includes(pillHost);
+  }
+
+  function push(ev) {
+    if (!recording) return;
+    rec.queue.push({ ...ev, t: Date.now(), url: location.href });
+    clearTimeout(rec.flushTimer);
+    rec.flushTimer = setTimeout(flushRec, rec.queue.length > 50 ? 0 : 800);
+  }
+
+  function flushRec() {
+    if (!rec.queue.length) return;
+    const events = rec.queue.splice(0);
+    try { api.runtime.sendMessage({ type: "rec", events }).catch?.(() => {}); } catch {}
+  }
+
+  function onClick(e) {
+    if (fromPill(e) || !e.isTrusted) return;
+    const t = e.composedPath()[0];
+    const el = (t.nodeType === 1 ? t : t.parentElement)?.closest(ACTIONABLE) || (t.nodeType === 1 ? t : t.parentElement);
+    if (!el) return;
+    if (el.tagName === "INPUT" && /^(checkbox|radio|text|email|search|password|number|tel|url)$/.test(el.type)) return; // change covers these
+    push({ kind: "click", target: describeTarget(el) });
+    expectChange();
+  }
+
+  function onChange(e) {
+    if (fromPill(e)) return;
+    const el = e.composedPath()[0];
+    if (!el || el.nodeType !== 1) return;
+    const ty = (el.type || "").toLowerCase();
+    if (ty === "checkbox" || ty === "radio") return push({ kind: "toggle", target: describeTarget(el), value: el.checked });
+    if (el.tagName === "SELECT") return push({ kind: "select", target: describeTarget(el), value: [...el.selectedOptions].map((o) => o.text.trim()).join(", ") });
+    if (ty === "file") return push({ kind: "input", target: describeTarget(el), value: [...(el.files || [])].map((f) => f.name).join(", ") });
+    if ("value" in el) push({ kind: "input", target: describeTarget(el), value: !rec.values ? undefined : isSensitive(el) ? "(hidden)" : clip(el.value, 500) });
+  }
+
+  function onFocusOut(e) {
+    const el = e.composedPath()[0];
+    if (el?.nodeType === 1 && el.isContentEditable && !el.parentElement?.isContentEditable) {
+      push({ kind: "input", target: describeTarget(el), value: rec.values ? clip(el.innerText, 500) : undefined });
+    }
+  }
+
+  function onSubmit(e) {
+    const form = e.composedPath()[0];
+    if (form?.tagName === "FORM") push({ kind: "submit", target: describeTarget(form) });
+    expectChange();
+  }
+
+  function onKey(e) {
+    if (!e.isTrusted || fromPill(e)) return;
+    const special = ["Enter", "Escape"].includes(e.key);
+    const combo = (e.ctrlKey || e.metaKey || e.altKey) && e.key.length === 1;
+    if (!special && !combo) return;
+    const mods = [e.ctrlKey && "Control", e.metaKey && "Meta", e.altKey && "Alt", e.shiftKey && combo && "Shift"].filter(Boolean);
+    const el = e.composedPath()[0];
+    push({ kind: "key", key: [...mods, e.key].join("+"), target: el?.nodeType === 1 && el !== document.body ? describeTarget(el) : undefined });
+    if (e.key === "Enter") expectChange();
+  }
+
+  function hashText(s) {
+    let h = 0;
+    for (let i = 0; i < s.length; i++) h = (Math.imul(31, h) + s.charCodeAt(i)) | 0;
+    return String(h);
+  }
+
+  function recordPage() {
+    if (!recording || !document.body) return;
+    rec.mut = 0;
+    const { text } = snapshot({ maxLines: 800 });
+    const outline = text.replace(/^Scroll: .*$/m, "");
+    const h = hashText(outline);
+    if (h === rec.lastHash) return;
+    rec.lastHash = h;
+    push({ kind: "page", title: document.title, outline });
+  }
+
+  // After an action, look again once the page has had time to react.
+  function expectChange() {
+    clearTimeout(rec.snapTimer);
+    rec.snapTimer = setTimeout(() => { rec.snapTimer = null; if (rec.mut > 15) recordPage(); }, 1200);
+  }
+
+  function startRecording(opts = {}) {
+    rec.values = opts.values !== false;
+    if (recording) return;
+    recording = true;
+    for (const [t, fn] of [["click", onClick], ["change", onChange], ["submit", onSubmit], ["keydown", onKey], ["focusout", onFocusOut]]) document.addEventListener(t, fn, true);
+    addEventListener("pagehide", flushRec);
+    document.addEventListener("visibilitychange", flushRec);
+    rec.obs = new MutationObserver((list) => {
+      for (const m of list) if (!pillHost || !pillHost.contains(m.target)) rec.mut++;
+      // Big changes without a click (live updates, lazy loading) still get captured, at most every 3s.
+      if (rec.mut > 300 && !rec.snapTimer) rec.snapTimer = setTimeout(() => { rec.snapTimer = null; recordPage(); }, 3000);
+    });
+    if (document.body) rec.obs.observe(document.body, { childList: true, subtree: true, characterData: true });
+    push({ kind: "nav", title: document.title, referrer: document.referrer || undefined });
+    if (document.readyState === "complete") setTimeout(recordPage, 300);
+    else addEventListener("load", () => setTimeout(recordPage, 300), { once: true });
+    updatePill();
+  }
+
+  function stopRecording() {
+    if (!recording) return;
+    flushRec();
+    recording = false;
+    for (const [t, fn] of [["click", onClick], ["change", onChange], ["submit", onSubmit], ["keydown", onKey], ["focusout", onFocusOut]]) document.removeEventListener(t, fn, true);
+    rec.obs?.disconnect();
+    clearTimeout(rec.snapTimer);
+    rec.snapTimer = null;
+    updatePill();
   }
 
   // ------------------------------------------------------------ wiring
@@ -597,12 +797,13 @@
         sendResponse({ ok: true });
         return;
       case "agents":
-        ensurePill();
-        renderPill();
+        shared = true;
+        updatePill();
         sendResponse({ ok: true });
         return;
       case "activity":
-        ensurePill();
+        shared = true;
+        updatePill();
         if (msg.summary) setActivity(`${msg.agent ? msg.agent + " " : ""}${msg.summary}`);
         sendResponse({ ok: true });
         return;
@@ -611,12 +812,26 @@
         sendResponse({ ok: true });
         return;
       case "unshared":
-        removeAll();
+        shared = false;
+        updatePill();
+        sendResponse({ ok: true });
+        return;
+      case "record":
+        msg.on ? startRecording(msg) : stopRecording();
+        sendResponse({ ok: true });
+        return;
+      case "recNav":
+        // Single-page apps change the URL without a load.
+        if (recording) {
+          push({ kind: "nav", title: document.title });
+          setTimeout(recordPage, 800);
+        }
         sendResponse({ ok: true });
         return;
     }
     const fn = handlers[msg.cmd];
     if (!fn) return;
+    shared = true;
     Promise.resolve()
       .then(() => fn(msg))
       .then(
@@ -632,19 +847,28 @@
     api.runtime.sendMessage({ type: "console", entry: e.data.__tetherConsole }).catch?.(() => {});
   });
 
-  // Heartbeat keeps the background awake while a shared tab is open.
+  // Heartbeat keeps the background awake while this tab is shared or recorded.
   const beat = setInterval(() => {
     try {
-      api.runtime.sendMessage({ type: "heartbeat" }).then?.((r) => { if (r && r.shared === false) removeAll(); }, () => clearInterval(beat));
+      api.runtime.sendMessage({ type: "heartbeat" }).then?.(
+        (r) => {
+          if (!r) return;
+          if (!r.shared && shared) { shared = false; updatePill(); }
+          if (!r.recording && recording) stopRecording();
+        },
+        () => clearInterval(beat)
+      );
     } catch {
       clearInterval(beat);
     }
   }, 20000);
 
   api.runtime.sendMessage({ type: "pillState" }).then?.((s) => {
-    if (!s?.shared) return;
+    if (!s) return;
     agents = s.agents || [];
     if (s.activity) lastActivity = `${s.activity.agent} ${s.activity.summary}`;
-    ensurePill();
+    shared = !!s.shared;
+    if (s.recording) startRecording(s.recording);
+    else updatePill();
   });
 })();

@@ -2,7 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { NO_TABS } from "./hub.js";
-import { listScripts, getScript, saveScript, deleteScript } from "./scripts.js";
+import { list, get, save, remove, importText } from "./scripts.js";
+import { listSites, sessionsOf, readSession, siteMap, readNotes, writeNotes, resolveHost } from "./sites.js";
+import { listRequests, imagesOf, resolveRequest } from "./requests.js";
 
 const tab = z.string().optional().describe('Tab handle from list_tabs, e.g. "chrome:812". Optional when only one tab is shared.');
 const ref = z.string().describe('Element ref from the latest snapshot, e.g. "e14".');
@@ -234,53 +236,210 @@ export function registerTools(server, hub, agentName) {
     { readOnlyHint: true }
   );
 
-  // ---- user scripts ----
+  // ---- user scripts (Tampermonkey-compatible .user.js files) ----
+
+  const where = (s) => (s.matches.length ? s.matches : s.includes).join(", ") || "every site";
 
   tool(
     "list_scripts",
-    "List the user's saved Tether scripts. They live in ~/.tether/scripts and appear in the extension popup on matching sites.",
+    "List the user's userscripts: ones you saved and ones they imported. They live in ~/.tether/scripts as .user.js files, appear in the Tether popup on matching sites, and work unchanged in Tampermonkey or Violentmonkey.",
     {},
     async () => {
-      const s = listScripts();
+      const s = list("script");
       if (!s.length) return text("No scripts saved yet.");
-      return text(s.map((x) => `${x.id}  ${x.name}  [${x.run}]  ${x.matches.join(" ")}\n    ${x.description}`).join("\n"));
+      return text(s.map((x) => `${x.id}  ${x.name} v${x.version}  [${x.run}]  ${where(x)}${x.body === undefined ? "  (imported)" : ""}\n    ${x.description}`).join("\n"));
     },
     { readOnlyHint: true }
   );
 
   tool(
     "save_script",
-    "Save a reusable script for the user. It shows up in the Tether popup on pages matching `matches`, where the user can run it with one click. With run=auto it runs on every matching page load. The code runs in an isolated world with DOM access; write plain JavaScript, no imports. Saving with an existing name replaces it.",
+    "Save a reusable userscript. `code` is the body of a function: plain JavaScript with full DOM access in the page, no imports; use `return` to hand a result back to run_script. These GM_ APIs work in Tether and in Tampermonkey: GM_addStyle, GM_getValue, GM_setValue, GM_deleteValue, GM_listValues, GM_xmlhttpRequest, GM_openInTab, GM_setClipboard, GM_notification, unsafeWindow. run=manual puts a Run button in the popup (and a menu command in Tampermonkey); run=auto runs on every matching page load. Saving an existing name replaces it and bumps its version.",
     {
       name: z.string(),
       description: z.string().optional(),
       matches: z.array(z.string()).describe('Match patterns, e.g. ["https://mail.example.com/*"].'),
       run: z.enum(["manual", "auto"]).optional(),
+      runAt: z.enum(["document-start", "document-end", "document-idle"]).optional().describe("For run=auto. Default document-idle."),
       code: z.string(),
     },
     async (a) => {
-      const s = saveScript(a);
+      const s = save("script", a);
       hub.pushScripts();
-      return text(`Saved "${s.name}" as ${s.id}.js. It appears in the popup on ${s.matches.join(", ")}.`);
+      return text(`Saved "${s.name}" v${s.version} as ~/.tether/scripts/${s.id}.user.js (${s.run}, on ${where(s)}). The same file installs in Tampermonkey or Violentmonkey.`);
     }
   );
+
+  tool("get_script", "Read a saved script, to change it. Returns the editable body for scripts you saved, or the whole file for imported ones.", { name: z.string() }, async (a) => {
+    const s = get("script", a.name);
+    if (!s) throw new Error(`No script called ${a.name}`);
+    return text(s.body !== undefined ? `${s.name} v${s.version} [${s.run}] on ${where(s)}\n\n${s.body}` : s.code);
+  }, { readOnlyHint: true });
 
   tool(
     "run_script",
     "Run a saved script in a shared tab and return its result.",
     { tab, name: z.string() },
     async (a) => {
-      const s = getScript(a.name);
+      const s = get("script", a.name);
       if (!s) throw new Error(`No script called ${a.name}`);
       const { handle } = hub.resolveTab(a.tab);
       hub.activity(agentName(), "run_script", handle, `ran ${s.name}`);
-      const res = await hub.callTab(handle, "runJs", { code: s.code });
+      const res = await hub.callTab(handle, "runItem", { id: s.id });
       return text(res.value === undefined ? `Ran ${s.name}.` : JSON.stringify(res.value, null, 2));
     }
   );
 
+  tool(
+    "install_userscript",
+    "Install a userscript (.user.js) or user style (.user.css) from a URL, such as Greasy Fork, OpenUserJS or userstyles.world, or from pasted text. It is saved unchanged. @require'd libraries and style preprocessors (Stylus, Less) are not supported.",
+    { url: z.string().optional(), text: z.string().optional() },
+    async (a) => {
+      let src = a.text;
+      if (a.url) {
+        const r = await fetch(a.url, { redirect: "follow", signal: AbortSignal.timeout(20000) });
+        if (!r.ok) throw new Error(`Download failed: HTTP ${r.status}`);
+        src = await r.text();
+      }
+      if (!src) throw new Error("Pass a url or text.");
+      const item = importText(src, a.url ? new URL(a.url).pathname.split("/").pop() : "");
+      hub.pushScripts();
+      const warn = item.requires?.length ? ` It @requires ${item.requires.length} external librar${item.requires.length === 1 ? "y" : "ies"}, which Tether does not load.` : item.unsupported ? ` Note: it ${item.unsupported}.` : "";
+      return text(`Installed ${item.kind} "${item.name}" v${item.version} as ${item.id}.${warn}`);
+    }
+  );
+
+  // ---- change requests from the popup ----
+
+  tool(
+    "get_requests",
+    "Read change requests the user sent from the Tether popup: what they want changed on a site, often with reference images (screenshots, mockups, mood boards). The tab they sent it from is shared with you. Handle open requests, then call resolve_request.",
+    { status: z.enum(["open", "all"]).optional().describe("Default open."), id: z.string().optional() },
+    async (a) => {
+      let reqs = listRequests({ status: a.id ? "all" : a.status || "open" });
+      if (a.id) reqs = reqs.filter((r) => r.id === a.id);
+      if (!reqs.length) return text(a.id ? `No request ${a.id}.` : "No open requests. The user can send one from the Tether popup with “Request a change”.");
+      const content = [];
+      for (const r of reqs.slice(0, 5)) {
+        const head = `Request ${r.id} (${r.status}) from ${r.tab || "a tab"}\n${r.title ? r.title + "\n" : ""}${r.url}`;
+        const tail = (r.images.length ? `\n\n${r.images.length} image(s) attached:` : "") + (r.reply ? `\n\nYour reply: ${r.reply}` : "");
+        content.push({ type: "text", text: `${head}\n\n${r.text || "(no text)"}${tail}` });
+        for (const img of imagesOf(r)) content.push({ type: "image", data: img.data, mimeType: img.mimeType });
+      }
+      if (reqs.length > 5) content.push({ type: "text", text: `${reqs.length - 5} more not shown.` });
+      return { content };
+    },
+    { readOnlyHint: true }
+  );
+
+  tool(
+    "resolve_request",
+    "Mark a change request done and leave a short reply the user sees in the popup (what you changed, and how to turn it off).",
+    { id: z.string(), reply: z.string() },
+    async (a) => {
+      resolveRequest(a.id, a.reply);
+      hub.pushRequests();
+      return text(`Resolved ${a.id}.`);
+    }
+  );
+
+  // ---- styles ----
+
+  tool(
+    "apply_css",
+    "Preview CSS on a shared tab without saving it. Each call replaces the previous preview on that tab; navigation clears it. Check the result with screenshot, then save_style.",
+    { tab, css: z.string() },
+    async (a) => {
+      const { handle } = hub.resolveTab(a.tab);
+      hub.activity(agentName(), "apply_css", handle, "is previewing a new look");
+      await hub.callTab(handle, "previewCss", { css: a.css });
+      return text("Preview applied. Take a screenshot to check it.");
+    }
+  );
+
+  tool("clear_preview", "Remove the CSS preview from a tab.", { tab }, async (a) => {
+    await hub.callTab(a.tab, "previewCss", { css: "" });
+    return text("Preview removed.");
+  });
+
+  tool(
+    "save_style",
+    "Save CSS that restyles a site on every visit, in every connected browser. It is stored as a UserCSS file (~/.tether/styles/<id>.user.css) that also installs unchanged in Stylus. It shows in the popup on matching pages, where the user can switch it off. Saving an existing name replaces it and bumps its version. Use !important where the site's own rules win. For changes CSS can't do, pair it with save_script (run=auto).",
+    { name: z.string(), description: z.string().optional(), matches: z.array(z.string()).describe('Match patterns, e.g. ["https://mail.google.com/*"].'), css: z.string() },
+    async (a) => {
+      const s = save("style", a);
+      hub.pushScripts();
+      return text(`Saved style "${s.name}" v${s.version} as ~/.tether/styles/${s.id}.user.css. It applies now on open matching tabs and on every visit. The file installs as-is in Stylus.`);
+    }
+  );
+
+  tool("list_styles", "List saved site styles, yours and imported ones.", {}, async () => {
+    const s = list("style");
+    return text(s.length ? s.map((x) => `${x.id}  ${x.name} v${x.version}  ${x.matches.join(" ") || "every site"}${x.body === undefined ? "  (imported)" : ""}\n    ${x.description}`).join("\n") : "No styles saved yet.");
+  }, { readOnlyHint: true });
+
+  tool("get_style", "Read a saved style, to change it. Returns the editable CSS for styles you saved, or the whole UserCSS file for imported ones.", { name: z.string() }, async (a) => {
+    const s = get("style", a.name);
+    if (!s) throw new Error(`No style called ${a.name}`);
+    return text(s.body !== undefined ? `${s.name} v${s.version} on ${s.matches.join(", ") || "every site"}\n\n${s.body}` : s.code);
+  }, { readOnlyHint: true });
+
+  tool("delete_style", "Delete a saved style.", { name: z.string() }, async (a) => {
+    if (!remove("style", a.name)) throw new Error(`No style called ${a.name}`);
+    hub.pushScripts();
+    return text(`Deleted ${a.name}.`);
+  }, { destructiveHint: true });
+
+  // ---- what Tether recorded about sites ----
+
+  tool(
+    "site_list",
+    "List sites Tether has recorded the user using (clicks, typing, pages, API calls), and sites with saved notes.",
+    {},
+    async () => {
+      const s = listSites();
+      if (!s.length) return text("Nothing recorded yet. The user can record from the Tether popup (Record this tab, or Always record on a site).");
+      return text(s.map((x) => `${x.host}  ${x.sessions} sessions, ${x.events} events${x.notes ? ", has notes" : ""}${x.last ? `, last ${new Date(x.last).toISOString().slice(0, 10)}` : ""}`).join("\n"));
+    },
+    { readOnlyHint: true }
+  );
+
+  tool(
+    "site_map",
+    "Summarise everything recorded for a site: its pages, the buttons and links the user actually uses on each (with CSS selectors), the fields they fill, the API endpoints behind it, common paths between pages, and saved notes. Pass page for one page in detail including its last outline. Read this before automating or restyling a site.",
+    { site: z.string().describe('Host, e.g. "erp.example.com".'), page: z.string().optional().describe('Path from the map, e.g. "/orders/:id/edit".') },
+    async (a) => text(siteMap(resolveHost(a.site), { page: a.page })),
+    { readOnlyHint: true }
+  );
+
+  tool(
+    "site_sessions",
+    "List recorded sessions for a site, or read one session's timeline step by step.",
+    { site: z.string(), session: z.string().optional(), from: z.number().int().optional(), limit: z.number().int().optional().describe("Default 200 events.") },
+    async (a) => {
+      const host = resolveHost(a.site);
+      if (a.session) return text(readSession(host, a.session, { from: a.from, limit: a.limit }));
+      const s = sessionsOf(host);
+      return text(s.length ? s.map((x) => `${x.id}  ${new Date(x.started).toISOString().slice(0, 16).replace("T", " ")}  ${x.events} events  ${x.browser || ""}  ${x.startUrl}`).join("\n") : `No sessions for ${host}.`);
+    },
+    { readOnlyHint: true }
+  );
+
+  tool(
+    "site_notes",
+    "Read or write notes about a site that persist for future sessions and other agents: how things work, where things are, gotchas. Without text it reads them.",
+    { site: z.string(), text: z.string().optional(), append: z.boolean().optional().describe("Add to the notes instead of replacing them.") },
+    async (a) => {
+      let host;
+      try { host = resolveHost(a.site); } catch { host = String(a.site).replace(/^https?:\/\//, "").split("/")[0]; }
+      if (a.text == null) return text(readNotes(host) || `No notes for ${host} yet.`);
+      writeNotes(host, a.text, a.append);
+      return text(`Notes for ${host} saved.`);
+    }
+  );
+
   tool("delete_script", "Delete a saved script.", { name: z.string() }, async (a) => {
-    if (!deleteScript(a.name)) throw new Error(`No script called ${a.name}`);
+    if (!remove("script", a.name)) throw new Error(`No script called ${a.name}`);
     hub.pushScripts();
     return text(`Deleted ${a.name}.`);
   }, { destructiveHint: true });

@@ -2,7 +2,9 @@
 // tool calls to the right browser by tab handle ("chrome:812").
 import { WebSocketServer } from "ws";
 import { safeEqual } from "./config.js";
-import { listScripts } from "./scripts.js";
+import { list, importText } from "./scripts.js";
+import { ingest } from "./sites.js";
+import { saveRequest, listRequests } from "./requests.js";
 
 const EXT_ORIGIN = /^(chrome-extension|moz-extension|safari-web-extension):\/\//;
 
@@ -52,6 +54,27 @@ export class Hub {
 
       if (msg.type === "ping") return ws.send(JSON.stringify({ type: "pong" }));
       if (msg.type === "tabs") { browser.tabs = msg.tabs || []; return; }
+      if (msg.type === "rec") {
+        try { ingest(browser.key, msg.events || []); } catch (e) { this.log("recording write failed:", e.message); }
+        if (msg.ack) ws.send(JSON.stringify({ type: "recAck", ack: msg.ack }));
+        return;
+      }
+      if (msg.type === "importItem") {
+        let item, error;
+        try { item = importText(String(msg.text || ""), msg.filename || ""); } catch (e) { error = e.message; }
+        ws.send(JSON.stringify({ type: "importResult", nonce: msg.nonce, error, id: item?.id, kind: item?.kind, name: item?.name, warning: item?.requires?.length ? "It uses @require libraries, which Tether doesn't load." : item?.unsupported ? `It ${item.unsupported}.` : "" }));
+        if (item) this.pushScripts();
+        return;
+      }
+      if (msg.type === "request") {
+        let saved, error;
+        try { saved = saveRequest({ ...msg.request, browser: browser.key, tab: msg.request.tabId != null ? `${browser.key}:${msg.request.tabId}` : undefined }); }
+        catch (e) { error = e.message; }
+        ws.send(JSON.stringify({ type: "requestSaved", nonce: msg.nonce, id: saved?.id, error }));
+        this.pushRequests();
+        this.log(`request ${saved?.id}: ${String(msg.request.text || "").slice(0, 60)}`);
+        return;
+      }
       if (msg.type === "result") {
         const p = browser.pending.get(msg.id);
         if (!p) return;
@@ -168,8 +191,18 @@ export class Hub {
   }
 
   pushScripts(browser) {
-    const scripts = listScripts();
-    for (const b of browser ? [browser] : this.browsers.values()) send(b, { type: "scripts", scripts });
+    const scripts = list("script");
+    const styles = list("style");
+    for (const b of browser ? [browser] : this.browsers.values()) {
+      send(b, { type: "scripts", scripts });
+      send(b, { type: "styles", styles });
+    }
+    this.pushRequests(browser);
+  }
+
+  pushRequests(browser) {
+    const recent = listRequests({ status: "all" }).slice(0, 30).map(({ id, text, url, status, reply, created, resolved, images }) => ({ id, text, url, status, reply, created, resolved, images: images.length }));
+    for (const b of browser ? [browser] : this.browsers.values()) send(b, { type: "requests", requests: recent });
   }
 }
 
