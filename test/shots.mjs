@@ -83,6 +83,24 @@ await sw.evaluate((id) => chrome.tabs.sendMessage(id, { cmd: "activity", agent: 
 await wait(300);
 await tab.screenshot({ path: path.join(out, "page-pill.png") });
 
+// The agent's cursor heading for a button.
+const snapText = (await sw.evaluate((id) => chrome.tabs.sendMessage(id, { cmd: "snapshot" }, { frameId: 0 }), tabId)).text;
+const btnRef = snapText.match(/button "New invoice" \[(e\d+)\]/)[1];
+await sw.evaluate(({ id, ref }) => chrome.tabs.sendMessage(id, { cmd: "hover", ref, agents: ["Claude Code"] }, { frameId: 0 }), { id: tabId, ref: btnRef });
+await wait(150);
+await tab.screenshot({ path: path.join(out, "cursor.png"), clip: { x: 0, y: 0, width: 700, height: 420 } });
+
+// Drag the pill up to the top-left.
+await tab.mouse.move(850, 605);
+await tab.mouse.down();
+await tab.mouse.move(600, 400, { steps: 8 });
+await tab.mouse.move(380, 120, { steps: 8 });
+await tab.mouse.up();
+await wait(200);
+await tab.screenshot({ path: path.join(out, "pill-dragged.png") });
+await sw.evaluate(() => chrome.storage.local.remove("pillPos"));
+await wait(200);
+
 // The agent hands the tab to the user.
 await sw.evaluate((id) => pauseTab(id, { by: "agent", agent: "Claude Code", message: "Please type the 6-digit code from your phone, then press Done." }), tabId);
 await wait(300);

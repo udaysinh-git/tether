@@ -11,7 +11,7 @@ import { watchAll } from "./scripts.js";
 import { startWatchers, setWatcherEnabled, runWatcher, getWatcher, deleteWatcher } from "./watchers.js";
 import { galleryIndex, shotOf, publishGist } from "./gallery.js";
 
-const VERSION = "0.2.0";
+const VERSION = "0.2.1";
 const IDLE_EXIT_MS = 30 * 60 * 1000;
 
 const AGENT_NAMES = { "claude-code": "Claude Code", "codex-mcp-client": "Codex", codex: "Codex", cursor: "Cursor", "gemini-cli": "Gemini CLI" };

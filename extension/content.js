@@ -271,7 +271,110 @@
   async function reveal(el) {
     el.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
     await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    await moveCursor(el);
     flash(el);
+  }
+
+  // ------------------------------------------------------------ agent cursor
+  // A visible pointer with the agent's name glides to each element before the
+  // agent acts on it, so the user can follow along. Off in settings, and it
+  // jumps instead of gliding when the user prefers reduced motion.
+
+  let showPill = true;
+  let pillPos = null; // { x, y } top-left, when the user has dragged it
+  api.storage.local.get(["showPill", "pillPos"]).then((v) => {
+    showPill = v.showPill !== false;
+    pillPos = v.pillPos || null;
+    placePill();
+    renderPill();
+  }, () => {});
+  api.storage.onChanged.addListener((c) => {
+    if (c.showPill) { showPill = c.showPill.newValue !== false; renderPill(); }
+    if (c.pillPos) { pillPos = c.pillPos.newValue || null; placePill(); }
+  });
+
+  function placePill() {
+    if (!pillHost) return;
+    if (!pillPos) { pillHost.style.inset = "auto 16px 16px auto"; return; }
+    const x = Math.max(4, Math.min(innerWidth - 120, pillPos.x));
+    const y = Math.max(4, Math.min(innerHeight - 48, pillPos.y));
+    pillHost.style.inset = `${y}px auto auto ${x}px`;
+  }
+
+  // Drag the pill anywhere; double-click puts it back in the corner.
+  function makeDraggable(pill) {
+    let start = null;
+    pill.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0 || e.target.closest("button")) return;
+      const r = pillHost.getBoundingClientRect();
+      start = { dx: e.clientX - r.left, dy: e.clientY - r.top, moved: false };
+      pill.setPointerCapture(e.pointerId);
+    });
+    pill.addEventListener("pointermove", (e) => {
+      if (!start) return;
+      start.moved = true;
+      pillPos = { x: Math.round(e.clientX - start.dx), y: Math.round(e.clientY - start.dy) };
+      placePill();
+    });
+    const end = () => {
+      if (start?.moved && pillPos) api.storage.local.set({ pillPos });
+      start = null;
+    };
+    pill.addEventListener("pointerup", end);
+    pill.addEventListener("pointercancel", end);
+    pill.addEventListener("dblclick", (e) => {
+      if (e.target.closest("button")) return;
+      pillPos = null;
+      placePill();
+      api.storage.local.remove("pillPos");
+    });
+  }
+
+  let showCursor = true;
+  api.storage.local.get("showCursor").then((v) => { showCursor = v.showCursor !== false; }, () => {});
+  api.storage.onChanged.addListener((c) => {
+    if (c.showCursor) {
+      showCursor = c.showCursor.newValue !== false;
+      if (!showCursor) pillRoot?.querySelector(".cur")?.classList.remove("on");
+    }
+  });
+  let cur = { x: null, y: null, hideTimer: null };
+  const reduceMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  async function moveCursor(el) {
+    if (!IS_TOP || !showCursor || !shared) return;
+    ensurePill();
+    const c = pillRoot?.querySelector(".cur");
+    if (!c) return;
+    const r = el.getBoundingClientRect();
+    // Aim a little left of centre on wide fields, where people actually click.
+    const x = Math.round(r.left + Math.min(r.width / 2, r.width > 240 ? 60 : r.width / 2));
+    const y = Math.round(r.top + r.height / 2);
+    c.querySelector(".name").textContent = agents[0] || "Agent";
+    const from = cur.x == null ? { x: Math.min(innerWidth - 40, x + 160), y: Math.min(innerHeight - 40, y + 120) } : cur;
+    const dist = Math.hypot(x - from.x, y - from.y);
+    const ms = reduceMotion() ? 0 : Math.round(Math.min(650, Math.max(220, dist * 0.55)));
+    c.style.transition = "none";
+    c.style.transform = `translate(${from.x}px, ${from.y}px)`;
+    c.classList.add("on");
+    c.getBoundingClientRect();
+    c.style.transition = ms ? `transform ${ms}ms cubic-bezier(.2, .7, .2, 1), opacity .2s ease-out` : "opacity .2s ease-out";
+    c.style.transform = `translate(${x}px, ${y}px)`;
+    cur.x = x;
+    cur.y = y;
+    clearTimeout(cur.hideTimer);
+    cur.hideTimer = setTimeout(() => c.classList.remove("on"), 4000);
+    if (ms) await new Promise((res) => setTimeout(res, ms + 40));
+  }
+
+  function cursorClick() {
+    if (!IS_TOP || !showCursor || !pillRoot || cur.x == null) return;
+    const ring = document.createElement("div");
+    ring.className = "ripple";
+    ring.style.left = cur.x + "px";
+    ring.style.top = cur.y + "px";
+    pillRoot.appendChild(ring);
+    setTimeout(() => ring.remove(), 500);
   }
 
   function label(el) {
@@ -296,6 +399,7 @@
     }
     const top = document.elementFromPoint(x, y);
     const covered = top && top !== el && !el.contains(top) && !top.contains(el);
+    if (verb === "Clicked") cursorClick();
     const note = `${verb} ${label(el)}` + (covered ? ` (note: ${label(top)} was on top of it)` : "");
     setActivity(note);
     return { x, y, note };
@@ -304,6 +408,7 @@
   async function focusFor({ ref, append }) {
     const el = byRef(ref);
     await reveal(el);
+    cursorClick();
     el.focus();
     let clear = false;
     if ("value" in el && typeof el.select === "function" && el.tagName !== "SELECT") {
@@ -333,6 +438,7 @@
   async function click({ ref, double }) {
     const el = byRef(ref);
     await reveal(el);
+    cursorClick();
     mouse(el, "pointerover"); mouse(el, "mouseover");
     mouse(el, "pointerdown", { buttons: 1 }); mouse(el, "mousedown", { buttons: 1 });
     el.focus?.({ preventScroll: true });
@@ -365,6 +471,7 @@
   async function type({ ref, text, append, submit }) {
     const el = byRef(ref);
     await reveal(el);
+    cursorClick();
     el.focus();
     if (el.isContentEditable) {
       const range = document.createRange();
@@ -401,6 +508,7 @@
   async function select({ ref, values }) {
     const el = byRef(ref);
     await reveal(el);
+    cursorClick();
     pickOptions(el, values);
     const note = `Picked ${values.join(", ")} in ${label(el)}`;
     setActivity(note);
@@ -411,8 +519,8 @@
     const done = [];
     for (const { ref, value } of fields) {
       const el = byRef(ref);
-      el.scrollIntoView({ block: "center", behavior: "instant" });
-      flash(el);
+      await reveal(el);
+      cursorClick();
       const ty = (el.type || "").toLowerCase();
       if (ty === "checkbox" || ty === "radio" || role(el) === "checkbox" || role(el) === "switch") {
         const want = value === true || value === "true" || value === "on" || value === 1;
@@ -541,6 +649,7 @@
       <style>
         :host { all: initial; }
         .pill {
+          cursor: grab; user-select: none; touch-action: none;
           display: flex; align-items: center; gap: 10px;
           max-width: 340px; padding: 8px 8px 8px 12px;
           background: #1e1d1a; color: #ece8e1;
@@ -561,6 +670,8 @@
         .pill.ask button.act { background: #e8a33d; color: #22180a; font-weight: 500; }
         .pill.ask button.act:hover { background: #f0b357; }
         button[hidden] { display: none; }
+        .pill.off { display: none; }
+        .pill:active { cursor: grabbing; }
         button {
           flex: none; margin-left: 4px; padding: 5px 10px;
           background: #2a2825; color: #ece8e1; border: 0; border-radius: 8px;
@@ -574,9 +685,27 @@
           transition: opacity .5s ease-out;
         }
         .hl.on { opacity: 1; transition: none; }
-        @media (prefers-reduced-motion: reduce) { .hl { transition: none; } }
+        .cur { position: fixed; left: 0; top: 0; pointer-events: none; opacity: 0; z-index: 2; will-change: transform; }
+        .cur.on { opacity: 1; }
+        .cur svg { display: block; filter: drop-shadow(0 1px 2px rgb(0 0 0 / .35)); }
+        .cur .name {
+          position: absolute; left: 14px; top: 18px; padding: 2px 7px; border-radius: 6px;
+          background: #e8a33d; color: #22180a; white-space: nowrap;
+          font: 500 11.5px/1.4 system-ui, "Segoe UI Variable Text", "Segoe UI", sans-serif;
+        }
+        .ripple {
+          position: fixed; width: 28px; height: 28px; margin: -14px 0 0 -14px; border-radius: 50%;
+          border: 2px solid #e8a33d; pointer-events: none; z-index: 1;
+          animation: tether-ripple .45s ease-out forwards;
+        }
+        @keyframes tether-ripple { from { transform: scale(.35); opacity: .9; } to { transform: scale(1.4); opacity: 0; } }
+        @media (prefers-reduced-motion: reduce) { .hl { transition: none; } .ripple { animation-duration: .01s; } }
       </style>
       <div class="hl"></div>
+      <div class="cur" aria-hidden="true">
+        <svg width="18" height="22" viewBox="0 0 18 22"><path d="M1.5 1.5 L1.5 17.5 L5.8 13.6 L8.9 20.5 L11.8 19.2 L8.8 12.5 L14.6 12.5 Z" fill="#e8a33d" stroke="#22180a" stroke-width="1.4" stroke-linejoin="round"/></svg>
+        <span class="name"></span>
+      </div>
       <div class="pill" role="status">
         <span class="dot" aria-hidden="true"></span>
         <div class="lines"><div class="t"></div><div class="s"></div></div>
@@ -587,9 +716,12 @@
     pillSub = pillRoot.querySelector(".s");
     hl = pillRoot.querySelector(".hl");
     pillRoot.querySelector("button.stop").addEventListener("click", () => api.runtime.sendMessage({ type: "stop" }));
+    makeDraggable(pillRoot.querySelector(".pill"));
+    pillRoot.querySelector(".pill").title = "Drag to move. Double-click to put it back in the corner.";
     // Pause, Resume, or Done when the agent asked for help.
     pillRoot.querySelector("button.act").addEventListener("click", () => api.runtime.sendMessage({ type: paused ? "resume" : "pause" }));
     (document.body || document.documentElement).appendChild(pillHost);
+    placePill();
     renderPill();
   }
 
@@ -601,6 +733,7 @@
     if (!pillText) return;
     const act = pillRoot.querySelector("button.act");
     const pill = pillRoot.querySelector(".pill");
+    pill.classList.toggle("off", !showPill && !(shared && paused?.by === "agent"));
     pill.classList.toggle("ask", !!(paused && paused.by === "agent"));
     act.hidden = !shared;
     if (shared && paused?.by === "agent") {

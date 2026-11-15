@@ -145,6 +145,14 @@ function scriptsSection() {
     </section>`;
 }
 
+function pillRow() {
+  return `
+    <div class="toggle-row">
+      <p class="grow faint">Show status on the page (drag it to move)</p>
+      <button class="switch small" role="switch" aria-checked="${st.showPill}" aria-label="Show status on the page" data-act="pillToggle" data-on="${!st.showPill}"></button>
+    </div>`;
+}
+
 function bypassRow() {
   return `
     <section class="bypass">
@@ -252,7 +260,7 @@ function render() {
   renderStatus();
   const err = st.conn === "denied" && st.connError ? `<p class="error" style="padding:0 4px">${esc(st.connError)}</p>` : "";
   document.getElementById("top").innerHTML = (st.paired ? tabCard() : pairCard()) + err + requestsSection();
-  document.getElementById("rest").innerHTML = othersSection() + stylesSection() + scriptsSection() + watchersSection() + recordSection() + (st.paired ? bypassRow() : "") + footer();
+  document.getElementById("rest").innerHTML = othersSection() + stylesSection() + scriptsSection() + watchersSection() + recordSection() + (st.paired ? pillRow() + bypassRow() : "") + footer();
 }
 
 // ---------------------------------------------------------------- composer
@@ -348,6 +356,7 @@ composerEl.addEventListener("click", (e) => {
 
 async function refresh() {
   st = await send({ type: "state", tabId });
+  st.showPill = (await api.storage.local.get("showPill")).showPill !== false;
   render();
 }
 
@@ -404,6 +413,9 @@ app.addEventListener("click", async (e) => {
         break;
       case "watcher":
         await send({ type: "hostRpc", method: "setWatcherEnabled", params: { id: b.dataset.id, on: b.dataset.on === "true" } });
+        break;
+      case "pillToggle":
+        await api.storage.local.set({ showPill: b.dataset.on === "true" });
         break;
       case "scriptToggle":
         await send({ type: "toggleScript", id: b.dataset.id, on: b.dataset.on === "true" });
