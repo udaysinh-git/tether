@@ -210,6 +210,7 @@ The extension asks for broad permissions so pages can't stop the agent from doin
 | `webRequest` | Network log; in Firefox also response bodies for fetch/XHR, and removing CSP headers on shared tabs so `run_js` works there |
 | `scripting`, `userScripts` | The page outline and actions; saved scripts |
 | `cookies` | The `cookies` tool |
+| `nativeMessaging` (Firefox) | Talking to the Tether bridge, which the browser starts |
 | `tabs`, `webNavigation`, `storage`, `alarms` | Tracking shared tabs and the tabs they open; reconnecting after the browser puts the extension to sleep |
 
 While the debugger is attached, Chromium shows a "Tether started debugging this browser" bar. That bar is the browser's own notice and the extension can't hide it. If you click Cancel on it, Tether stops using the debugger for that tab and falls back to ordinary DOM events. You can also turn it off for good under **Real input** in Tether's settings.
@@ -247,7 +248,8 @@ node host/cli.js setup      # config lines for Claude Code and Codex
 ## Development
 
 ```
-host/        MCP host: cli.js, shim.js (stdio bridge), daemon.js (HTTP + WebSocket), hub.js, tools.js,
+host/        MCP host: cli.js, shim.js (stdio bridge for agents), native.js (native messaging bridge
+             for Firefox), install-native.js, daemon.js (HTTP + WebSocket), hub.js, tools.js,
              scripts.js (userscript + UserCSS files), sites.js (recordings, site map), requests.js
 extension/   background.js, content.js (outline, actions, pill), popup/, options/, prompt/ (bypass window)
 scripts/     build-ext.js writes dist/chrome and dist/firefox; make-icons.js draws the icons
