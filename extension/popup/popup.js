@@ -31,8 +31,8 @@ function renderStatus() {
   let dot = "off", text;
   if (!st.paired) text = "Not paired";
   else if (st.conn === "connected" && st.agents.length) { dot = ""; text = joinNames(st.agents); }
-  else if (st.conn === "connected") text = "Host ready, no agent yet";
-  else if (st.conn === "waiting" || st.conn === "connecting") text = "Waiting for the host";
+  else if (st.conn === "connected") text = "Ready, no agent yet";
+  else if (st.conn === "waiting" || st.conn === "connecting") text = st.tab?.shared ? "Waiting for the host" : "No agent running";
   else if (st.conn === "denied") text = "Pairing failed";
   else text = "Idle";
   statusEl.innerHTML = `<span class="dot ${dot}"></span><span>${esc(text)}</span>`;

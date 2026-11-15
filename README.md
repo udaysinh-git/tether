@@ -19,17 +19,39 @@ Codex ───────┼─ tether (stdio) ─ HTTP ─ host ┤
 other MCP ───┘          127.0.0.1:47821      └─ Firefox extension ── shared tabs
 ```
 
-Each agent launches `tether` as an ordinary stdio MCP server. The first one starts a small host process in the background, and every later one connects to the same host, so all agents see the same browsers. The extension connects to the host over a local WebSocket while at least one tab is shared, and drops the connection when you stop sharing. The host quits by itself after 30 minutes with nothing connected.
+Each agent launches `tether` as an ordinary stdio MCP server. The first one starts a small host process in the background, and every later one connects to the same host, so all agents see the same browsers. Once paired, the extension keeps a local WebSocket open to the host whenever the host is running, so an agent can ask to start a session. You can turn that off in settings, and then it only connects while something is shared or recorded. The host quits by itself after 30 minutes with nothing connected.
 
 Nothing happens on a tab you haven't shared. The agent can't list it, read it or touch it. A shared tab gets an amber badge on the toolbar button and a small pill in the corner of the page that names the agent, shows its latest action and has a Stop button.
 
 ![The in-page pill: "Shared with Claude Code. Claude Code clicked New invoice", with a Stop button](docs/page-pill.png)
 
-Tabs join the session in three ways:
+Tabs join the session in these ways:
 
 1. You click **Share this tab**.
-2. A shared page opens a new tab or window (a `target="_blank"` link, `window.open`). Tabs you open yourself with Ctrl+T don't count.
-3. The agent opens one with `open_tab`.
+2. The agent calls `start_session` and you click **Open window** or **Share tab** in the prompt (see below).
+3. A shared page opens a new tab or window (a `target="_blank"` link, `window.open`). Tabs you open yourself with Ctrl+T don't count.
+4. The agent opens one with `open_tab`, or any tab is opened inside the agent's own window.
+
+## Agent sessions
+
+An agent doesn't have to wait for you to click. When it needs the browser it calls `start_session`, and a small prompt asks you first:
+
+- **Its own window** (the default). Tether opens a new window in your browser, signed in as you, and the agent works only in that window's tabs. Your own tabs and windows stay private and keep working. The agent closes the window with `end_session`, or you close it.
+- **The tab you're on** (`mode: "current"`). For tasks about the page in front of you. It's the same as clicking Share this tab yourself.
+
+Settings has a switch to skip the prompt for the agent's own window, and one to turn session requests off.
+
+## The skill
+
+`skills/tether-browser/SKILL.md` teaches Claude Code, Codex and other agents to use Tether for browser work instead of Playwright: how to start a session, the snapshot-and-ref loop, debugging, restyling, scripts, reading recordings, and when to ask before acting. Link it into each agent's skills folder so it stays in sync with the repo:
+
+```powershell
+foreach ($d in "$env:USERPROFILE\.claude\skills", "$env:USERPROFILE\.codex\skills", "$env:USERPROFILE\.agents\skills") {
+  New-Item -ItemType Junction -Path "$d\tether-browser" -Target "E:\Projects\tether\skills\tether-browser"
+}
+```
+
+On macOS or Linux, `ln -s "$PWD/skills/tether-browser" ~/.claude/skills/` and the same for the other folders.
 
 ## Setup
 
@@ -79,6 +101,7 @@ Temporary add-ons are removed when Firefox closes. To keep it installed, sign it
 | Tool | What it does |
 | --- | --- |
 | `list_tabs` | Lists the tabs it may use, with handles like `chrome:812` |
+| `start_session`, `end_session` | Asks for its own window or your current tab; closes the window or gives the tab back |
 | `snapshot` | Reads the page as an outline of headings, text and controls, each control with a ref like `[e14]` |
 | `read_text` | Plain visible text of the page or one element |
 | `click`, `hover` | Clicks or hovers an element by ref |
@@ -184,7 +207,7 @@ The extension asks for broad permissions so pages can't stop the agent from doin
 | `webRequest` | Network log; in Firefox also response bodies for fetch/XHR, and removing CSP headers on shared tabs so `run_js` works there |
 | `scripting`, `userScripts` | The page outline and actions; saved scripts |
 | `cookies` | The `cookies` tool |
-| `tabs`, `webNavigation`, `storage` | Tracking shared tabs and the tabs they open |
+| `tabs`, `webNavigation`, `storage`, `alarms` | Tracking shared tabs and the tabs they open; reconnecting after the browser puts the extension to sleep |
 
 While the debugger is attached, Chromium shows a "Tether started debugging this browser" bar. That bar is the browser's own notice and the extension can't hide it. If you click Cancel on it, Tether stops using the debugger for that tab and falls back to ordinary DOM events. You can also turn it off for good under **Real input** in Tether's settings.
 
@@ -234,7 +257,7 @@ npm test        # end-to-end, once with the debugger and once without
 npm run shots   # screenshots of the popup, pill, prompt and settings into test/shots
 ```
 
-The end-to-end test loads the built extension into Playwright's Chromium, serves a test page, connects an MCP client through the stdio shim and checks sharing, the outline, form filling, trusted clicks, network and console capture, saved and imported userscripts, CSS previews and saved styles, recording and the site map, change requests with images, bypass and stopping. `--fallback` runs it again without the debugger, which is the same code path Firefox uses. Firefox itself is checked with `npx web-ext lint -s dist/firefox`, not driven end to end.
+The end-to-end test loads the built extension into Playwright's Chromium, serves a test page, connects an MCP client through the stdio shim and checks sharing, the outline, form filling, trusted clicks, network and console capture, saved and imported userscripts, CSS previews and saved styles, recording and the site map, change requests with images, agent windows and current-tab sessions, bypass and stopping. `--fallback` runs it again without the debugger, which is the same code path Firefox uses. Firefox itself is checked with `npx web-ext lint -s dist/firefox`, not driven end to end.
 
 ## Known limits
 

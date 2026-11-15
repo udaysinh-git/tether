@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
-import { NO_TABS } from "./hub.js";
+import { NO_TABS, NO_BROWSER } from "./hub.js";
 import { list, get, save, remove, importText } from "./scripts.js";
 import { listSites, sessionsOf, readSession, siteMap, readNotes, writeNotes, resolveHost } from "./sites.js";
 import { listRequests, imagesOf, resolveRequest } from "./requests.js";
@@ -36,7 +36,7 @@ export function registerTools(server, hub, agentName) {
     {},
     async () => {
       const tabs = hub.allTabs();
-      if (!tabs.length) return text(NO_TABS);
+      if (!tabs.length) return text(hub.browsers.size ? NO_TABS : NO_BROWSER);
       const line = (t) => `${t.tab}${t.active ? " (active)" : ""}  ${t.title || "(untitled)"}\n    ${t.url}`;
       const shared = tabs.filter((t) => t.shared !== false);
       const rest = tabs.filter((t) => t.shared === false);
@@ -181,6 +181,41 @@ export function registerTools(server, hub, agentName) {
         return { name: path.basename(p), data: data.toString("base64"), type: mime(p) };
       });
       return act(a, "upload", { ref: a.ref, files }, `attached ${files.map((f) => f.name).join(", ")}`, 60000);
+    }
+  );
+
+  tool(
+    "start_session",
+    "Start working in the user's own browser (their logins and cookies) when no tab is shared yet. mode=window (default) opens a separate window for you, so the user's tabs are left alone; every tab you open in it is yours. mode=current asks to use the tab the user is looking at, for tasks about the page they're on. The user approves in a prompt (up to two minutes). Returns the tab handle and a snapshot.",
+    {
+      mode: z.enum(["window", "current"]).optional(),
+      url: z.string().optional().describe("For mode=window: the page to open first."),
+      reason: z.string().describe("One sentence the user will read, saying what you're about to do."),
+      browser: z.string().optional().describe("Browser key when several are connected."),
+    },
+    async (a) => {
+      const b = hub.pickBrowser(a.browser);
+      const res = await hub.call(b, "startSession", { agent: agentName(), reason: a.reason, url: a.url, mode: a.mode || "window" }, 135000);
+      if (!res.granted) return text(res.note);
+      const handle = `${b.key}:${res.tabId}`;
+      await new Promise((r) => setTimeout(r, 200));
+      const snap = a.url || a.mode === "current" ? await hub.callTab(handle, "snapshot", { maxLines: 250 }).catch(() => null) : null;
+      return text(`${res.note}\nTab: ${handle}${res.windowId != null && a.mode !== "current" ? `  (window ${res.windowId})` : ""}${snap?.text ? "\n\n" + snap.text : ""}`);
+    }
+  );
+
+  tool(
+    "end_session",
+    "Finish a session you started: closes the window start_session opened for you (all of them if you don't name one). With tab, stops using that shared tab instead, leaving it open for the user.",
+    { tab: tab.describe("Stop using this tab rather than closing your window."), windowId: z.number().int().optional() },
+    async (a) => {
+      if (a.tab) {
+        const { browser, tabId } = hub.resolveTab(a.tab);
+        return text((await hub.call(browser, "endSession", { tabId })).note);
+      }
+      const notes = [];
+      for (const b of hub.browsers.values()) notes.push((await hub.call(b, "endSession", { windowId: a.windowId })).note);
+      return text(notes.join("\n") || "Nothing to end.");
     }
   );
 

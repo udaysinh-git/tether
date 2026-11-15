@@ -122,7 +122,7 @@ export class Hub {
 
   resolveTab(handle) {
     const tabs = this.allTabs();
-    if (!tabs.length) throw new Error(NO_TABS);
+    if (!tabs.length) throw new Error(this.browsers.size ? NO_TABS : NO_BROWSER);
     if (handle == null || handle === "") {
       const shared = tabs.filter((t) => t.shared !== false);
       if (shared.length === 1) return this.split(shared[0].tab);
@@ -143,7 +143,7 @@ export class Hub {
   }
 
   pickBrowser(name) {
-    if (!this.browsers.size) throw new Error(NO_TABS);
+    if (!this.browsers.size) throw new Error(NO_BROWSER);
     if (name) {
       const b = this.browsers.get(name) || [...this.browsers.values()].find((x) => x.name.toLowerCase() === String(name).toLowerCase());
       if (!b) throw new Error(`No connected browser called ${name}. Connected: ${[...this.browsers.keys()].join(", ")}`);
@@ -211,4 +211,7 @@ function send(b, msg) {
 }
 
 export const NO_TABS =
-  "No tabs are shared yet. Ask the user to open the page they want help with and click the Tether button in the browser toolbar, then choose Share this tab.";
+  "No tab is shared yet. Call start_session to open your own window in the user's browser (they approve it in a prompt), start_session with mode=current to ask for the tab they're on, or ask them to click the Tether button and choose Share this tab.";
+
+export const NO_BROWSER =
+  "No browser is connected to Tether. Ask the user to open their browser with the Tether extension installed and paired (Tether popup shows “Ready”). If they haven't set it up: run `node host/cli.js setup` in the tether repo, load dist/chrome or dist/firefox, and paste the pairing key.";

@@ -21,7 +21,9 @@ function itemRow(kind, s) {
 
 async function load() {
   const st = await send({ type: "state", tabId: -1 });
-  const { key = "", autoRecord = [] } = await api.storage.local.get(["key", "autoRecord"]);
+  const { key = "", autoRecord = [], standby, askWindow } = await api.storage.local.get(["key", "autoRecord", "standby", "askWindow"]);
+  $("standby").setAttribute("aria-checked", String(standby !== false));
+  $("askWindow").setAttribute("aria-checked", String(askWindow !== false));
   $("key").value = key;
   $("port").value = st.port;
 
@@ -80,6 +82,8 @@ document.addEventListener("click", async (e) => {
   const t = e.target.closest("button, a");
   if (!t) return;
   if (t.id === "trusted") return send({ type: "setSettings", trusted: flip(t) });
+  if (t.id === "standby") return send({ type: "setSettings", standby: flip(t) });
+  if (t.id === "askWindow") return send({ type: "setSettings", askWindow: flip(t) });
   if (t.id === "recValues") return send({ type: "setRecordValues", on: flip(t) });
   if (t.id === "grant") {
     if (await api.permissions.request({ permissions: ["userScripts"] })) await send({ type: "recheckScripts" });

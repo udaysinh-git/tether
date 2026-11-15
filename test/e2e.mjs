@@ -78,7 +78,7 @@ let [sw] = ctx.serviceWorkers();
 if (!sw) sw = await ctx.waitForEvent("serviceworker");
 // TRUSTED=0 exercises the path Firefox uses: synthetic events, webRequest, page-world console hook.
 const TRUSTED = process.env.TRUSTED !== "0" && !process.argv.includes("--fallback");
-await sw.evaluate(({ key, port, trusted }) => chrome.storage.local.set({ key, port, trusted }), { key, port: PORT, trusted: TRUSTED });
+await sw.evaluate(async ({ key, port, trusted }) => { await chrome.storage.local.set({ key, port, trusted }); await refreshStandby(); }, { key, port: PORT, trusted: TRUSTED });
 
 const tab = await ctx.newPage();
 await tab.goto(site);
@@ -94,7 +94,7 @@ const call = async (name, args = {}) => {
 
 try {
   let t = await call("list_tabs");
-  ok(/No tabs are shared/.test(t.text), "nothing visible before the user shares");
+  ok(/No tab is shared yet[\s\S]*start_session/.test(t.text), "browser waits in standby; nothing visible before the user shares");
 
   // The user clicks Share in the popup.
   const tabId = await sw.evaluate(async (url) => {
@@ -224,6 +224,53 @@ try {
   await wait(500);
   const reqs = await sw.evaluate(() => state.requests);
   ok(reqs.some((r) => r.id === reqId && r.status === "done" && r.reply.includes("Calm test")), "reply shows up in the extension");
+
+  // ---- an agent starts its own session: a separate window, after the user agrees
+  const askPage = () => ctx.waitForEvent("page", { predicate: (p) => p.url().includes("prompt.html"), timeout: 15000 });
+  let ask = askPage();
+  let pendingSession = call("start_session", { url: site + "/two?agentwin", reason: "Check the docs page for you" });
+  let pp = await ask;
+  await pp.waitForLoadState();
+  ok((await pp.textContent("body")).includes("wants its own window") && (await pp.textContent("body")).includes("Check the docs page for you"), "window prompt names the agent and the reason");
+  await pp.click("#allow");
+  t = await pendingSession;
+  const agentTab = t.text.match(/Tab: (\S+)/)?.[1];
+  const agentWin = Number(t.text.match(/window (\d+)/)?.[1]);
+  ok(agentTab && /Docs page/.test(t.text), "start_session opens a window and returns its tab with a snapshot");
+  const winTabs = await sw.evaluate((w) => chrome.tabs.query({ windowId: w }), agentWin);
+  ok(winTabs.length === 1 && !winTabs.some((x) => x.url.includes("private")), "the agent window is separate from the user's tabs");
+  await sw.evaluate((w) => chrome.tabs.create({ windowId: w, url: "about:blank" }), agentWin);
+  await wait(500);
+  t = await call("list_tabs");
+  ok((t.text.match(new RegExp(`\\(window|${agentTab.split(":")[0]}:`, "g")) || []).length >= 4 && t.text.includes("agentwin"), "new tabs in the agent window are shared");
+  t = await call("end_session", {});
+  await wait(500);
+  ok(/Closed 1 agent window/.test(t.text) && !(await sw.evaluate(() => chrome.windows.getAll())).some((w) => w.id === agentWin), "end_session closes the window");
+
+  // Declining leaves nothing shared.
+  ask = askPage();
+  pendingSession = call("start_session", { reason: "Try something" });
+  pp = await ask;
+  await pp.waitForLoadState();
+  await pp.click("#deny");
+  t = await pendingSession;
+  ok(/declined/.test(t.text), "a declined session opens nothing");
+
+  // mode=current asks for the tab the user is on.
+  await other.bringToFront();
+  await sw.evaluate(async () => { const [t] = await chrome.tabs.query({ url: "*://*/two?private" }); await chrome.windows.update(t.windowId, { focused: true }); await chrome.tabs.update(t.id, { active: true }); });
+  ask = askPage();
+  pendingSession = call("start_session", { mode: "current", reason: "Read this page" });
+  pp = await ask;
+  await pp.waitForLoadState();
+  ok((await pp.textContent("body")).includes("wants to use this tab"), "current-tab prompt");
+  await pp.click("#allow");
+  t = await pendingSession;
+  ok(/Using the user's tab/.test(t.text) && /Docs page/.test(t.text), "mode=current shares the user's tab");
+  const curTab = t.text.match(/Tab: (\S+)/)?.[1];
+  await call("end_session", { tab: curTab });
+  t = await call("list_tabs");
+  ok(!t.text.includes("private"), "end_session with a tab stops sharing it");
 
   // Bypass: answer the prompt as the user would.
   const promptPage = ctx.waitForEvent("page", { predicate: (p) => p.url().includes("prompt.html"), timeout: 15000 });

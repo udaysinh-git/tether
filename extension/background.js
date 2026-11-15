@@ -25,6 +25,8 @@ const state = {
   console: new Map(), // tabId -> [entries]
   userScripts: "unknown",
   bypass: false, // user-approved access to every tab, for this browser session
+  standby: false, // connected and waiting for an agent to ask for a session
+  agentWindows: new Set(), // windows opened for an agent; their tabs are shared
   styles: [],
   disabledStyles: new Set(), // style ids the user switched off in this browser
   disabledScripts: new Set(), // script ids the user switched off in this browser
@@ -79,17 +81,38 @@ async function init() {
     setBadge(id, true);
     attachCdp(id);
   }
+  for (const w of (await api.storage.session.get("agentWindows")).agentWindows || []) {
+    try { await api.windows.get(w); state.agentWindows.add(w); } catch {}
+  }
+  const s = await settings();
+  state.standby = !!s.key && s.standby;
   if (active()) connect();
 }
 
 // The connection stays up while anything is shared or bypass mode is on.
-const active = () => state.shared.size > 0 || state.bypass || state.recording.size > 0 || state.recQueue.length > 0 || state.pendingRequests.length > 0;
+// Standby: stay connected while paired so an agent can ask to start a session.
+// Nothing is visible to it until the user approves.
+const active = () => state.shared.size > 0 || state.bypass || state.recording.size > 0 || state.recQueue.length > 0 || state.pendingRequests.length > 0 || state.standby;
 const allowed = (tabId) => state.shared.has(tabId) || state.bypass;
 
 async function settings() {
-  const s = await api.storage.local.get(["key", "port", "trusted"]);
-  return { key: s.key || "", port: s.port || 47821, trusted: s.trusted !== false };
+  const s = await api.storage.local.get(["key", "port", "trusted", "standby", "askWindow"]);
+  return { key: s.key || "", port: s.port || 47821, trusted: s.trusted !== false, standby: s.standby !== false, askWindow: s.askWindow !== false };
 }
+
+async function refreshStandby() {
+  const s = await settings();
+  state.standby = !!s.key && s.standby;
+  if (active()) connect();
+}
+
+// Service workers and event pages sleep; the alarm brings standby back.
+api.alarms?.create("tether-standby", { periodInMinutes: 1 });
+api.alarms?.onAlarm.addListener(async (a) => {
+  if (a.name !== "tether-standby") return;
+  await ready;
+  if (active() && !ws) connect();
+});
 
 async function browserName() {
   if (IS_FIREFOX) return (await api.runtime.getBrowserInfo()).name || "Firefox";
@@ -133,7 +156,9 @@ function scheduleRetry() {
   setConn("waiting");
   clearTimeout(retryTimer);
   retryTimer = setTimeout(connect, retryDelay);
-  retryDelay = Math.min(retryDelay * 1.5, 10000);
+  // Slower when only waiting in standby: the host may simply not be running.
+  const onlyStandby = !state.shared.size && !state.bypass && !state.recording.size && !state.recQueue.length && !state.pendingRequests.length;
+  retryDelay = Math.min(retryDelay * 1.5, onlyStandby ? 30000 : 10000);
 }
 
 function disconnect() {
@@ -246,7 +271,7 @@ async function unshare(tabId) {
   setBadge(tabId, false);
   toContent(tabId, { cmd: "unshared" }, false).catch(() => {});
   detachCdp(tabId);
-  pushTabs();
+  await pushTabsNow();
   if (!active()) disconnect();
   broadcast();
 }
@@ -263,14 +288,12 @@ async function setBypass(on) {
   broadcast();
 }
 
-// Asked for by an agent. Opens a small window where the user allows or denies.
-async function requestBypass(agent, reason) {
-  if (state.bypass) return { granted: true, note: "Bypass mode is already on." };
-  const id = String(Date.now());
-  const q = new URLSearchParams({ id, agent: agent || "An agent", reason: reason || "" });
-  const win = await api.windows.create({ url: api.runtime.getURL("prompt/prompt.html?" + q), type: "popup", width: 400, height: 300, focused: true });
+// Asks the user in a small window. kind: bypass | window | current.
+async function askUser(kind, agent, reason, detail = "") {
+  const id = String(Date.now()) + Math.random().toString(36).slice(2, 6);
+  const q = new URLSearchParams({ id, kind, agent: agent || "An agent", reason: reason || "", detail });
+  const win = await api.windows.create({ url: api.runtime.getURL("prompt/prompt.html?" + q), type: "popup", width: 420, height: 320, focused: true });
   const granted = await new Promise((resolve) => {
-    bypassWaiters.set(id, resolve);
     const timer = setTimeout(() => resolve(false), 120000);
     const onClose = (wid) => { if (wid === win.id) resolve(false); };
     api.windows.onRemoved.addListener(onClose);
@@ -278,9 +301,75 @@ async function requestBypass(agent, reason) {
   });
   bypassWaiters.delete(id);
   api.windows.remove(win.id).catch(() => {});
+  return granted;
+}
+
+async function requestBypass(agent, reason) {
+  if (state.bypass) return { granted: true, note: "Bypass mode is already on." };
+  const granted = await askUser("bypass", agent, reason);
   if (granted) await setBypass(true);
   return { granted, note: granted ? "The user turned on bypass mode. Every tab is now available." : "The user declined. Only shared tabs are available." };
 }
+
+// ---------------------------------------------------------------- agent sessions
+// An agent can ask for its own window (same logins, separate from the user's
+// tabs) or for the tab the user is looking at. Tabs in an agent window are shared.
+
+async function persistWindows() {
+  await api.storage.session.set({ agentWindows: [...state.agentWindows] });
+}
+
+async function startSession({ agent, reason, url, mode = "window" }) {
+  const s = await settings();
+  if (mode === "current") {
+    const [tab] = await api.tabs.query({ active: true, lastFocusedWindow: true, windowType: "normal" });
+    if (!tab) throw new Error("The user has no browser tab in front.");
+    if (!shareable(tab.url)) throw new Error("The user's current tab is a browser page and can't be shared. Use mode=window instead.");
+    if (!state.shared.has(tab.id)) {
+      const ok = await askUser("current", agent, reason, tab.title || tab.url);
+      if (!ok) return { granted: false, note: "The user declined to share their current tab." };
+      await share(tab.id, "user");
+    }
+    await waitForLoad(tab.id).catch(() => {});
+    return { granted: true, tabId: tab.id, windowId: tab.windowId, note: `Using the user's tab: ${tab.title || tab.url}` };
+  }
+
+  if (s.askWindow) {
+    const ok = await askUser("window", agent, reason, url || "");
+    if (!ok) return { granted: false, note: "The user declined. Ask them to share a tab instead, or try again later." };
+  }
+  const win = await api.windows.create({ url: url || "about:blank", focused: true, type: "normal", width: 1280, height: 860 });
+  state.agentWindows.add(win.id);
+  await persistWindows();
+  const tab = win.tabs?.[0] || (await api.tabs.query({ windowId: win.id }))[0];
+  state.shared.set(tab.id, { by: "agent", since: Date.now() });
+  await persist();
+  setBadge(tab.id, true);
+  await attachCdp(tab.id);
+  if (url) {
+    await waitForLoad(tab.id).catch(() => {});
+    await ensureContent(tab.id).catch(() => {});
+  }
+  await pushTabsNow();
+  broadcast();
+  return { granted: true, tabId: tab.id, windowId: win.id, note: "Opened a new window for you. Tabs you open in it are shared; the user's other tabs are not." };
+}
+
+async function endSession({ windowId, tabId }) {
+  const wins = windowId != null ? [windowId] : [...state.agentWindows];
+  for (const w of wins) {
+    state.agentWindows.delete(w);
+    await api.windows.remove(w).catch(() => {});
+  }
+  await persistWindows();
+  if (tabId != null && windowId == null) await unshare(tabId);
+  return { note: wins.length ? `Closed ${wins.length} agent window${wins.length === 1 ? "" : "s"}.` : "Stopped using the tab." };
+}
+
+api.windows.onRemoved.addListener(async (wid) => {
+  await ready;
+  if (state.agentWindows.delete(wid)) persistWindows();
+});
 
 function shareable(url = "") {
   return /^(https?|file):/.test(url) && !/^https:\/\/(chrome\.google\.com\/webstore|chromewebstore\.google\.com|addons\.mozilla\.org)/.test(url);
@@ -337,9 +426,17 @@ api.webNavigation.onCreatedNavigationTarget.addListener(async (d) => {
   broadcast();
 });
 
-api.tabs.onCreated.addListener(async () => {
+api.tabs.onCreated.addListener(async (tab) => {
   await ready;
-  if (state.bypass) pushTabs();
+  // Any tab in an agent's own window belongs to its session.
+  if (state.agentWindows.has(tab.windowId) && !state.shared.has(tab.id)) {
+    state.shared.set(tab.id, { by: "agent", since: Date.now() });
+    await persist();
+    setBadge(tab.id, true);
+    attachCdp(tab.id);
+    pushTabs();
+    broadcast();
+  } else if (state.bypass) pushTabs();
 });
 
 api.tabs.onRemoved.addListener(async (tabId) => {
@@ -886,6 +983,10 @@ async function handleCall(method, p) {
       return {};
     case "requestBypass":
       return requestBypass(p.agent, p.reason);
+    case "startSession":
+      return startSession(p);
+    case "endSession":
+      return endSession(p);
     case "closeTab":
       await api.tabs.remove(tabId);
       return {};
@@ -1383,12 +1484,18 @@ api.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if ("key" in msg) patch.key = String(msg.key).trim();
         if ("port" in msg) patch.port = Number(msg.port) || 47821;
         if ("trusted" in msg) patch.trusted = !!msg.trusted;
+        if ("standby" in msg) patch.standby = !!msg.standby;
+        if ("askWindow" in msg) patch.askWindow = !!msg.askWindow;
         await api.storage.local.set(patch);
         if ("trusted" in msg) {
           for (const id of state.shared.keys()) (msg.trusted ? attachCdp : detachCdp)(id);
         }
-        disconnect();
-        if (active()) connect();
+        // Only reconnect when the connection itself changed.
+        if ("key" in msg || "port" in msg || "standby" in msg) {
+          disconnect();
+          await refreshStandby();
+        }
+        broadcast();
         return { ok: true };
       }
       case "runScript": {

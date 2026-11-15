@@ -21,12 +21,12 @@ const targets = {
     ...base,
     minimum_chrome_version: "120",
     background: { service_worker: "background.js" },
-    permissions: ["tabs", "activeTab", "scripting", "storage", "unlimitedStorage", "debugger", "webRequest", "webNavigation", "cookies", "userScripts"],
+    permissions: ["tabs", "activeTab", "scripting", "storage", "unlimitedStorage", "debugger", "webRequest", "webNavigation", "cookies", "userScripts", "alarms"],
   },
   firefox: {
     ...base,
     background: { scripts: ["background.js"] },
-    permissions: ["tabs", "activeTab", "scripting", "storage", "unlimitedStorage", "webRequest", "webRequestBlocking", "webNavigation", "cookies"],
+    permissions: ["tabs", "activeTab", "scripting", "storage", "unlimitedStorage", "webRequest", "webRequestBlocking", "webNavigation", "cookies", "alarms"],
     optional_permissions: ["userScripts"],
     browser_specific_settings: {
       gecko: { id: "tether@udaysinh.me", strict_min_version: "128.0", data_collection_permissions: { required: ["none"] } },

@@ -25,6 +25,24 @@
         </form>
       </section>
 
+      <section>
+        <h2>Agent sessions</h2>
+        <div class="line">
+          <div class="grow">
+            <p>Let agents ask to start a session</p>
+            <p class="faint">Keeps a local connection to Tether so an agent can ask to open its own window or to use the tab you're on. It sees nothing until you allow it.</p>
+          </div>
+          <button id="standby" class="switch" role="switch" aria-checked="true" aria-label="Let agents ask to start a session"></button>
+        </div>
+        <div class="line">
+          <div class="grow">
+            <p>Ask before an agent opens its own window</p>
+            <p class="faint">Turn this off to let agents open a separate window without a prompt. Your other tabs stay private either way.</p>
+          </div>
+          <button id="askWindow" class="switch" role="switch" aria-checked="true" aria-label="Ask before an agent opens its own window"></button>
+        </div>
+      </section>
+
       <section id="trustedSection" hidden>
         <h2>Real input</h2>
         <div class="line">
