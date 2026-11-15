@@ -511,7 +511,10 @@
 
   function ensurePill() {
     if (pillHost?.isConnected) return;
+    // A pill left by this script's previous copy (the extension was reloaded) goes first.
+    for (const old of document.querySelectorAll("[data-tether-pill]")) old.remove();
     pillHost = document.createElement("div");
+    pillHost.setAttribute("data-tether-pill", "");
     pillHost.style.cssText = "all:initial;position:fixed;inset:auto 16px 16px auto;z-index:2147483647;";
     pillRoot = pillHost.attachShadow({ mode: "closed" });
     pillRoot.innerHTML = `
@@ -847,21 +850,37 @@
     api.runtime.sendMessage({ type: "console", entry: e.data.__tetherConsole }).catch?.(() => {});
   });
 
-  // Heartbeat keeps the background awake while this tab is shared or recorded.
+  // When the extension is reloaded or updated, this copy is cut off from it.
+  // Take the pill and listeners down so the new copy is the only one.
+  function orphaned() {
+    clearInterval(beat);
+    if (recording) { try { stopRecording(); } catch {} }
+    shared = false;
+    recording = false;
+    pillHost?.remove();
+    pillHost = null;
+    pillText = null;
+  }
+
+  // Heartbeat keeps the background awake while this tab is shared or recorded,
+  // and notices when this copy has been orphaned. Faster while the pill is up.
+  let beatCount = 0;
   const beat = setInterval(() => {
+    if (!(shared || recording) && ++beatCount % 4) return;
     try {
+      if (!api.runtime?.id) return orphaned();
       api.runtime.sendMessage({ type: "heartbeat" }).then?.(
         (r) => {
           if (!r) return;
           if (!r.shared && shared) { shared = false; updatePill(); }
           if (!r.recording && recording) stopRecording();
         },
-        () => clearInterval(beat)
+        (e) => { if (/context invalidated/i.test(String(e?.message || e))) orphaned(); }
       );
     } catch {
-      clearInterval(beat);
+      orphaned();
     }
-  }, 20000);
+  }, 5000);
 
   api.runtime.sendMessage({ type: "pillState" }).then?.((s) => {
     if (!s) return;

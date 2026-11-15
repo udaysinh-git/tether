@@ -54,7 +54,13 @@ export class Hub {
       }
 
       if (msg.type === "ping") return ws.send(JSON.stringify({ type: "pong" }));
-      if (msg.type === "tabs") { browser.tabs = msg.tabs || []; return; }
+      if (msg.type === "tabs") {
+        const before = browser.tabs.filter((t) => t.shared !== false).length;
+        browser.tabs = msg.tabs || [];
+        const now = browser.tabs.filter((t) => t.shared !== false).length;
+        if (now !== before) this.log(`${browser.key}: ${now} shared tab${now === 1 ? "" : "s"}`);
+        return;
+      }
       if (msg.type === "rec") {
         try { ingest(browser.key, msg.events || []); } catch (e) { this.log("recording write failed:", e.message); }
         if (msg.ack) ws.send(JSON.stringify({ type: "recAck", ack: msg.ack }));
