@@ -1,14 +1,17 @@
 {
   "name": "tether-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Hand chosen browser tabs to Claude Code, Codex or any MCP client.",
   "main": "host/cli.js",
   "scripts": {
     "build": "node scripts/build-ext.js",
-    "test": "node scripts/build-ext.js && node test/e2e.mjs && node test/e2e.mjs --fallback",
+    "test": "node scripts/build-ext.js && node test/e2e.mjs && node test/e2e.mjs --fallback && node test/features.mjs && node test/features.mjs --fallback",
     "serve": "node host/cli.js serve",
     "icons": "node scripts/make-icons.js",
-    "shots": "node scripts/build-ext.js && node test/shots.mjs"
+    "shots": "node scripts/build-ext.js && node test/shots.mjs",
+    "pack:firefox": "node scripts/build-ext.js && npx --yes web-ext@8 build -s dist/firefox -a dist --overwrite-dest -n tether-firefox-{version}.xpi",
+    "sign:firefox": "node scripts/build-ext.js && npx --yes web-ext@8 sign -s dist/firefox -a dist --channel unlisted",
+    "doctor": "node host/cli.js doctor"
   },
   "license": "UNLICENSED",
   "type": "module",

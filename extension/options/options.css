@@ -8,3 +8,8 @@ label { display: grid; gap: 6px; }
 .grow { flex: 1; display: grid; gap: 4px; }
 .script { background: var(--card); border-radius: 10px; padding: 12px 14px; display: grid; gap: 2px; margin-bottom: 8px; }
 .script .name { font-weight: 500; }
+h3.site { font-size: 14px; font-weight: 500; margin: 12px 0 6px; color: var(--text-2); }
+.shots { display: flex; gap: 12px; margin-top: 8px; }
+.shots figure { margin: 0; display: grid; gap: 4px; }
+.shots img { width: 200px; aspect-ratio: 16 / 10; object-fit: cover; object-position: top; border-radius: 8px; background: var(--raised); display: block; }
+.shots figcaption { font-size: 12px; color: var(--text-3); }

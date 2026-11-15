@@ -82,15 +82,21 @@ function tabCard() {
   const who = st.agents.length ? joinNames(st.agents) : "Your agent";
   const a = t.activity;
   const what = a ? `${esc(a.agent)} ${esc(a.summary)} <span class="faint" data-ago="${a.at}">· ${ago(a.at)}</span>` : st.agents.length ? "No actions yet." : "Start Claude Code or Codex with Tether added, and it can pick this tab up.";
-  const how = t.by === "bypass" ? "Joined through bypass mode" : t.by === "opener" ? "Opened by a shared tab" : t.by === "agent" ? "Opened by the agent" : `${esc(who)} can use this tab`;
+  let how = t.by === "bypass" ? "Joined through bypass mode" : t.by === "opener" ? "Opened by a shared tab" : t.by === "agent" ? "Opened by the agent" : `${esc(who)} can use this tab`;
+  let detail = what;
+  if (t.paused?.by === "agent") { how = `${esc(t.paused.agent || who)} needs you on this page`; detail = esc(t.paused.message || ""); }
+  else if (t.paused) { how = "Paused"; detail = `${esc(who)} will wait until you resume.`; }
   return `
     <section class="card">
       ${page}
       <div class="live">
         <p class="head"><span class="dot"></span>${how}</p>
-        <p class="what">${what}</p>
+        <p class="what">${detail}</p>
       </div>
-      <button data-act="unshare" data-id="${t.id}">Stop sharing</button>
+      <div class="row-actions">
+        <button data-act="${t.paused ? "resume" : "pause"}" ${t.paused?.by === "agent" ? 'class="primary"' : ""}>${t.paused?.by === "agent" ? "Done" : t.paused ? "Resume" : "Pause"}</button>
+        <button data-act="unshare" data-id="${t.id}">Stop sharing</button>
+      </div>
     </section>`;
 }
 
@@ -178,7 +184,7 @@ function requestsSection() {
   return `
     <section class="section">
       <h2 style="display:flex;justify-content:space-between;align-items:center;padding-right:0">Changes for this site
-        ${composer.open ? "" : `<button class="quiet" data-act="compose">Request a change</button>`}</h2>
+        ${composer.open ? "" : `<span><button class="quiet" data-act="pick" title="Point at something on the page and tell your agent about it">Pick</button><button class="quiet" data-act="compose">Request a change</button></span>`}</h2>
       ${rows}${pending}
     </section>`;
 }
@@ -199,6 +205,27 @@ function stylesSection() {
           <button class="switch small" role="switch" aria-checked="${s.on}" aria-label="${esc(s.name)}" data-act="style" data-id="${esc(s.id)}" data-on="${!s.on}"></button>
         </div>`
         )
+        .join("")}
+    </section>`;
+}
+
+function watchersSection() {
+  if (!st.watchers?.length) return "";
+  return `
+    <section class="section">
+      <h2>Watching this site</h2>
+      ${st.watchers
+        .map((w) => {
+          const last = w.last ? (w.last.ok ? `${esc(w.last.message || "checked")} · ${ago(w.last.at)}` : `Last check failed · ${ago(w.last.at)}`) : "Not checked yet";
+          return `
+        <div class="toggle-row">
+          <div class="grow">
+            <p class="name">${esc(w.name)}</p>
+            <p class="sub faint">Every ${w.every} min · ${last}</p>
+          </div>
+          <button class="switch small" role="switch" aria-checked="${w.enabled}" aria-label="${esc(w.name)}" data-act="watcher" data-id="${esc(w.id)}" data-on="${!w.enabled}"></button>
+        </div>`;
+        })
         .join("")}
     </section>`;
 }
@@ -225,7 +252,7 @@ function render() {
   renderStatus();
   const err = st.conn === "denied" && st.connError ? `<p class="error" style="padding:0 4px">${esc(st.connError)}</p>` : "";
   document.getElementById("top").innerHTML = (st.paired ? tabCard() : pairCard()) + err + requestsSection();
-  document.getElementById("rest").innerHTML = othersSection() + stylesSection() + scriptsSection() + recordSection() + (st.paired ? bypassRow() : "") + footer();
+  document.getElementById("rest").innerHTML = othersSection() + stylesSection() + scriptsSection() + watchersSection() + recordSection() + (st.paired ? bypassRow() : "") + footer();
 }
 
 // ---------------------------------------------------------------- composer
@@ -364,8 +391,19 @@ app.addEventListener("click", async (e) => {
       case "compose":
         openComposer();
         return;
+      case "pick":
+        await send({ type: "startPick", tabId });
+        window.close();
+        return;
       case "style":
         await send({ type: "toggleStyle", id: b.dataset.id, on: b.dataset.on === "true" });
+        break;
+      case "pause":
+      case "resume":
+        await send({ type: b.dataset.act, tabId });
+        break;
+      case "watcher":
+        await send({ type: "hostRpc", method: "setWatcherEnabled", params: { id: b.dataset.id, on: b.dataset.on === "true" } });
         break;
       case "scriptToggle":
         await send({ type: "toggleScript", id: b.dataset.id, on: b.dataset.on === "true" });

@@ -68,15 +68,34 @@
       </section>
 
       <section>
-        <h2>Styles</h2>
-        <div id="styles"></div>
+        <h2>Gallery</h2>
+        <p id="usStatus" class="muted"></p>
+        <div id="gallery"></div>
+        <p class="faint">Scripts are ordinary userscripts in <span class="cmd">~/.tether/scripts</span> and styles are UserCSS in <span class="cmd">~/.tether/styles</span>. Download one to install it in Tampermonkey, Violentmonkey or Stylus, or publish it as a secret Gist to share the link.</p>
+        <p id="publishResult" class="faint"></p>
       </section>
 
       <section>
-        <h2>Scripts</h2>
-        <p id="usStatus" class="muted"></p>
-        <div id="scripts"></div>
-        <p class="faint">Scripts are ordinary userscripts in <span class="cmd">~/.tether/scripts</span> and styles are UserCSS in <span class="cmd">~/.tether/styles</span>. Download one to install it in Tampermonkey, Violentmonkey or Stylus, or share it.</p>
+        <h2>Watchers</h2>
+        <div id="watchers"></div>
+      </section>
+
+      <section>
+        <h2>Notifications and publishing</h2>
+        <form id="hostSettings" class="grid">
+          <label>ntfy topic
+            <input id="ntfyTopic" type="text" placeholder="for example my-tether-alerts" autocomplete="off" spellcheck="false" />
+            <span class="faint">Watchers set to notify by ntfy post here. Leave empty to use browser notifications only.</span>
+          </label>
+          <label>ntfy server
+            <input id="ntfyServer" type="text" placeholder="https://ntfy.sh" autocomplete="off" spellcheck="false" />
+          </label>
+          <label>GitHub account for Gists
+            <input id="gistAccount" type="text" placeholder="the account signed in to the GitHub CLI" autocomplete="off" spellcheck="false" />
+            <span class="faint">Publishing uses the GitHub CLI (<span class="cmd">gh</span>). Name an account if you're signed in to more than one.</span>
+          </label>
+          <div><button class="primary" type="submit">Save</button> <span id="hostSaved" class="faint"></span></div>
+        </form>
       </section>
 
       <section>

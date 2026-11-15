@@ -97,7 +97,12 @@ This covers Firefox and browsers built on it, such as Zen, LibreWolf, Floorp and
 3. The first time you share a tab, Firefox asks for access to all sites; allow it.
 4. Optional: in Tether's settings, click **Allow user scripts**.
 
-Temporary add-ons are removed when Firefox closes. To keep it installed, sign it as an unlisted add-on with `npx web-ext sign -s dist/firefox --channel unlisted` (needs an addons.mozilla.org API key), or use Firefox Developer Edition with `xpinstall.signatures.required` set to `false`.
+Temporary add-ons are removed when the browser closes. Two ways to keep Tether installed:
+
+- Sign it. Create API credentials at addons.mozilla.org (Tools, Manage API Keys), set `WEB_EXT_API_KEY` and `WEB_EXT_API_SECRET`, and run `npm run sign:firefox`. It's signed as an unlisted add-on, which only you get, and the signed `.xpi` lands in `dist/`. Install it from `about:addons`, gear menu, **Install Add-on From File**. Every signing needs a new version number in `package.json`.
+- Skip signing in browsers that allow it (Firefox Developer Edition, Nightly, and some forks): set `xpinstall.signatures.required` to `false` in `about:config`, run `npm run pack:firefox`, and install `dist/tether-firefox-<version>.xpi` the same way.
+
+After installing a new build, reload the extension once so it picks up new permissions.
 
 ## What the agent can do
 
@@ -123,9 +128,33 @@ Temporary add-ons are removed when Firefox closes. To keep it installed, sign it
 | `save_script`, `get_script`, `run_script`, `list_scripts`, `delete_script` | Userscripts, saved in Tampermonkey's format |
 | `install_userscript` | Installs a `.user.js` or `.user.css` from a URL or pasted text |
 | `site_list`, `site_map`, `site_sessions`, `site_notes` | What Tether recorded about how you use a site, and notes agents keep about it |
+| `wait_for_user` | Hands the tab to you with a message (a CAPTCHA, a 2FA code) and continues when you press Done |
+| `list_media`, `save_media`, `video_frame` | Images, video, audio, canvases and streams on the page; saves them to disk; grabs the current video frame |
+| `wait_for_download`, `download_file`, `list_downloads` | Files the site produces, with their paths on disk |
+| `save_watcher`, `run_watcher`, `list_watchers`, `delete_watcher` | Checks a page on a schedule and notifies you |
 | `request_bypass` | Asks you for access to every tab (see below) |
 
-Every action returns a fresh snapshot, so the agent rarely needs a second call to see what changed.
+Every action returns a fresh snapshot, so the agent rarely needs a second call to see what changed. Content inside cross-origin iframes (payment forms, embedded forms, widgets) is part of the outline too, with refs like `[f12.e5]` that work in every tool.
+
+## Pausing
+
+Each shared page has **Pause** next to Stop, on the pill and in the popup. While a tab is paused the agent can still read it, but every click, keystroke and navigation is refused until you press **Resume**, and the agent is told to wait.
+
+It works the other way too. When the agent reaches something only you should do, like a CAPTCHA, a code from your phone, a login or a payment confirmation, it calls `wait_for_user` with a short message. The tab comes to the front, the pill shows the message with a **Done** button, and the agent carries on when you press it.
+
+## Pointing at things
+
+**Pick** in the popup lets you click any part of the page and type a note, such as "make this bigger", "watch this price" or "why is this broken?". The agent receives it like a change request: your note, the element's role, name, CSS selector, text and HTML, its outline, a screenshot cropped to the element and one of the whole page.
+
+## Media and downloads
+
+`list_media` lists what the page shows: images (including `blob:` ones the page generated), video and audio with their length and playing state, canvases, CSS background images, and HLS or DASH streams and media files seen in the network log. `save_media` saves any of them to `~/.tether/media/<site>/`. Normal files download with your cookies; `blob:` URLs and canvases are read out of the page; streams are copied into one `.mp4` with ffmpeg, if it's installed. Video that plays through MediaSource has no file behind its `blob:` URL, so save its stream instead (play it first so the stream shows up). `video_frame` returns the frame on screen.
+
+When a click downloads something (an invoice, an export), `wait_for_download` returns the file's path. `download_file` fetches a URL on a shared site with your cookies. The agent only sees downloads that started while a tab was shared, never your download history.
+
+## Watchers
+
+Ask for something like "tell me when this drops below ₹2,000" or "when the results are posted" and the agent saves a watcher. Every few minutes the browser loads the page with your cookies and a small check decides whether to tell you. Fetch mode reads the URL directly, which suits the JSON APIs the agent finds in the network log. Tab mode opens the page in a background tab for a moment, for pages built by JavaScript. Notifications arrive as a browser notification and, if you set a topic in Tether's settings, through ntfy on your phone. Watchers run while the host is running and a browser is connected. Turn them on or off in the popup or the settings page.
 
 ## Bypass mode
 
@@ -180,7 +209,7 @@ Scripts and styles are kept in the formats other managers use, one file each:
 })();
 ```
 
-Download any of them from Tether's settings page and drop the file into Tampermonkey or Stylus, or send it to someone. Manual scripts become a menu command there instead of running on load. Every save bumps `@version`, so those managers notice updates.
+Tether's settings page has a gallery of everything you've made, grouped by site. Styles saved while the agent had the page open come with before and after screenshots. Download any item and drop the file into Tampermonkey or Stylus, or press **Publish** to put it in a secret GitHub Gist (through the `gh` CLI) and get an install link to share. Manual scripts become a menu command in those managers instead of running on load. Every save bumps `@version`, so they notice updates, and publishing again updates the same Gist.
 
 It works the other way too. **Install** on the settings page, or the agent's `install_userscript`, takes `.user.js` and `.user.css` files from Greasy Fork, OpenUserJS, userstyles.world or anywhere else and keeps them unchanged. Tether supports `@match`, `@include`, `@exclude`, `@exclude-match` and `@run-at`, plus these `GM_` functions: `GM_addStyle`, `GM_getValue`, `GM_setValue`, `GM_deleteValue`, `GM_listValues`, `GM_xmlhttpRequest`, `GM_openInTab`, `GM_setClipboard`, `GM_notification`, `GM_registerMenuCommand`, the `GM.*` promise versions and `unsafeWindow`. UserCSS `@-moz-document` sections (`url`, `url-prefix`, `domain`, `regexp`) are matched the way Stylus matches them.
 
@@ -211,6 +240,8 @@ The extension asks for broad permissions so pages can't stop the agent from doin
 | `scripting`, `userScripts` | The page outline and actions; saved scripts |
 | `cookies` | The `cookies` tool |
 | `nativeMessaging` (Firefox) | Talking to the Tether bridge, which the browser starts |
+| `downloads` | Telling the agent where a file it triggered was saved |
+| `notifications` | Watcher alerts |
 | `tabs`, `webNavigation`, `storage`, `alarms` | Tracking shared tabs and the tabs they open; reconnecting after the browser puts the extension to sleep |
 
 While the debugger is attached, Chromium shows a "Tether started debugging this browser" bar. That bar is the browser's own notice and the extension can't hide it. If you click Cancel on it, Tether stops using the debugger for that tab and falls back to ordinary DOM events. You can also turn it off for good under **Real input** in Tether's settings.
@@ -240,7 +271,8 @@ node host/cli.js serve      # host in the foreground with logs
 node host/cli.js status     # browsers, agents and tab count
 node host/cli.js key        # print the pairing key
 node host/cli.js key --new  # rotate it
-node host/cli.js setup      # config lines for Claude Code and Codex
+node host/cli.js setup      # config lines for Claude Code and Codex, and registers the Firefox bridge
+node host/cli.js doctor     # checks every piece and says what to fix
 ```
 
 `npm link` puts `tether` on your PATH if you'd rather type that. Host logs go to `~/.tether/host.log` when an agent starts it.
@@ -262,11 +294,10 @@ npm test        # end-to-end, once with the debugger and once without
 npm run shots   # screenshots of the popup, pill, prompt and settings into test/shots
 ```
 
-The end-to-end test loads the built extension into Playwright's Chromium, serves a test page, connects an MCP client through the stdio shim and checks sharing, the outline, form filling, trusted clicks, network and console capture, saved and imported userscripts, CSS previews and saved styles, recording and the site map, change requests with images, agent windows and current-tab sessions, bypass and stopping. `--fallback` runs it again without the debugger, which is the same code path Firefox uses. Firefox itself is checked with `npx web-ext lint -s dist/firefox`, not driven end to end.
+The end-to-end test loads the built extension into Playwright's Chromium, serves a test page, connects an MCP client through the stdio shim and checks sharing, the outline, form filling, trusted clicks, network and console capture, saved and imported userscripts, CSS previews and saved styles, recording and the site map, change requests with images, agent windows and current-tab sessions, bypass and stopping. `test/features.mjs` covers pausing, downloads, cross-origin iframes, media, picked elements, watchers, gallery screenshots and sharing that survives a reload. `--fallback` runs either one again without the debugger, which is the same code path Firefox uses. Firefox itself is checked with `npx web-ext lint -s dist/firefox`, not driven end to end.
 
 ## Known limits
 
-- Cross-origin iframes show up in the outline as a line you can't read into. Same-origin frames are read and clicked normally.
 - Canvas apps (Figma, Google Sheets' grid, games) have little in the outline to act on. Use `screenshot` and `run_js`.
 - Network and console logs start when a tab is shared and keep the last 400 entries per tab.
 - Screenshots without the debugger, including all Firefox screenshots, bring the tab to the front first.

@@ -43,7 +43,28 @@ More tools:
 - `run_js` to read data the outline doesn't show or call the page's own APIs. The value of the last expression comes back. Prefer the normal tools for clicking and typing so the user sees what happens.
 - `navigate` (url, back, forward, reload), `open_tab`, `close_tab`.
 
+Cross-origin iframes (payment forms, embedded Google Forms, widgets) are part of the outline. Their refs look like `[f12.e5]` and work in every tool.
+
 Clicks and keys arrive as real input in Chromium browsers, so sites treat them like the user's own. Firefox gets ordinary DOM events, which a few strict sites ignore. If a click seems to do nothing there, try `press_key` Enter on the element, or tell the user.
+
+## When the user has to act
+
+- A CAPTCHA, a login, a 2FA or OTP code, a payment confirmation, or any choice that is theirs: call `wait_for_user` with a one-sentence `message`. The tab comes to the front with your message and a Done button, and the call returns when they press it (default wait 5 minutes). Then continue from the snapshot it returns.
+- If an action fails with "The user paused this tab", they pressed Pause to do something themselves. Call `wait_for_user` without a message to wait for Resume. Don't retry the action in a loop.
+
+## Files, media and downloads
+
+- After clicking something that downloads (an invoice, a CSV export, a PDF), call `wait_for_download` right away. It returns the file's path on disk. `download_file` fetches a URL on a shared site with the user's cookies.
+- `list_media` lists images, video, audio, canvases, background images and the HLS/DASH streams the page loaded, each with an id like `m3`. `save_media` saves one to `~/.tether/media/<site>/`. Streams need the video to have started playing so they appear in the list; a video whose source is a MediaSource `blob:` has no file, so save its stream entry instead.
+- `video_frame` returns the frame a video is showing.
+
+## Watching a page for the user
+
+When the user wants to hear about something later ("tell me when the price drops", "when results come out", "if this slot opens"), save a watcher instead of polling yourself:
+1. Find the cheapest source. Check `network_requests` for a JSON API behind the page; if there is one, use `mode: "fetch"` on that URL and read `response.json` in `check`. Otherwise use `mode: "tab"` with DOM code.
+2. `check` is a function body. Return the value to track (they're notified when it changes), or `{ notify: price < 2000, message: "Now " + price, value: price }` for a threshold.
+3. `save_watcher` with a sensible `every_minutes` (30 by default; don't go under 5 for normal sites), then `run_watcher` once to show the user the current value.
+4. Use `notify: ["browser", "ntfy"]` when they want it on their phone. The ntfy topic is set in Tether's settings.
 
 ## Debugging a site or web app
 
@@ -59,13 +80,13 @@ The user can record how they use a site. Before automating or restyling a site, 
 
 ## Changing how a site looks or works
 
-The user can send requests from the Tether popup ("Request a change") with text and images: screenshots, mockups, sketches. When they say they sent one, or ask you to check Tether, call `get_requests`. The images come back with it. The tab they sent it from is shared with you.
+The user can send requests from the Tether popup ("Request a change") with text and images: screenshots, mockups, sketches. They can also **Pick** an element on the page and attach a note; then the request carries that element's selector, text, HTML and outline, a cropped screenshot of it and one of the page. When they say they sent something, or ask you to check Tether, call `get_requests`. The tab they sent it from is shared with you.
 
 Restyling:
 1. `snapshot` and `screenshot` to see the page as it is. Use `run_js` to read class names or the structure you need to target.
 2. Write CSS. Target stable hooks (ids, `data-` attributes, roles, element structure) over generated class names. Use `!important` where the site's own rules win.
 3. `apply_css` to preview, `screenshot` to check, and repeat until it matches the request. Look at more than one page of the site if the style covers them.
-4. `save_style` with match patterns as narrow as the request: one site, not every site.
+4. `save_style` with match patterns as narrow as the request (one site, not every site), and pass `tab` so before and after screenshots go into the user's gallery.
 5. `resolve_request` with a short reply: what changed, and that they can switch it off in the popup.
 
 For things CSS can't do (moving elements, adding a button, reacting to content that loads late), add a script with `save_script`.
@@ -99,3 +120,5 @@ Files are standard `.user.js` userscripts and `.user.css` UserCSS, so they also 
 | That tab is not shared | The user stopped it, or it was never shared. Ask, or `start_session` |
 | …security policy blocks run_js | Firefox: reload the tab once and retry. Chromium: the user turned off real input in Tether settings |
 | … timed out | The page is slow or stuck. `screenshot` to see why |
+| The user paused this tab | `wait_for_user` without a message |
+| Anything about setup | Ask the user to run `node host/cli.js doctor` in the tether folder |

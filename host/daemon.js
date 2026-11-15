@@ -4,12 +4,14 @@ import http from "node:http";
 import { randomUUID } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { loadConfig, safeEqual } from "./config.js";
+import { loadConfig, safeEqual, setSetting } from "./config.js";
 import { Hub } from "./hub.js";
 import { registerTools } from "./tools.js";
 import { watchAll } from "./scripts.js";
+import { startWatchers, setWatcherEnabled, runWatcher, getWatcher, deleteWatcher } from "./watchers.js";
+import { galleryIndex, shotOf, publishGist } from "./gallery.js";
 
-const VERSION = "0.1.0";
+const VERSION = "0.2.0";
 const IDLE_EXIT_MS = 30 * 60 * 1000;
 
 const AGENT_NAMES = { "claude-code": "Claude Code", "codex-mcp-client": "Codex", codex: "Codex", cursor: "Cursor", "gemini-cli": "Gemini CLI" };
@@ -23,6 +25,19 @@ export async function serve({ quiet = false } = {}) {
   const hosts = new Set([`127.0.0.1:${cfg.port}`, `localhost:${cfg.port}`]);
 
   watchAll(() => hub.pushScripts());
+  startWatchers(hub, log);
+
+  // Calls from the extension's settings page and popup.
+  hub.rpc = {
+    setWatcherEnabled: ({ id, on }) => { setWatcherEnabled(id, on); hub.pushWatchers(); return { ok: true }; },
+    runWatcher: async ({ id }) => { const r = await runWatcher(hub, getWatcher(id)); hub.pushWatchers(); return r; },
+    deleteWatcher: ({ id }) => { deleteWatcher(id); hub.pushWatchers(); return { ok: true }; },
+    galleryIndex: () => galleryIndex(),
+    galleryImage: ({ kind, id, which }) => ({ dataUrl: shotOf(kind, id, which) }),
+    publishGist: ({ kind, id }) => publishGist(kind, id),
+    getSettings: () => { const c = loadConfig(); return { ntfyTopic: c.ntfyTopic || "", ntfyServer: c.ntfyServer || "", gistAccount: c.gistAccount || "" }; },
+    setSettings: (p) => { for (const k of ["ntfyTopic", "ntfyServer", "gistAccount"]) if (k in p) setSetting(k, String(p[k] || "").trim()); return { ok: true }; },
+  };
 
   const server = http.createServer(async (req, res) => {
     // Refuse anything a web page could send: wrong Host (DNS rebinding) or any Origin.

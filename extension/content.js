@@ -7,6 +7,19 @@
   Object.defineProperty(window, "__tetherContent", { value: true });
 
   const api = globalThis.browser ?? globalThis.chrome;
+  // Content runs in every frame of a shared tab; only the top frame shows UI.
+  const IS_TOP = window === window.top;
+
+  // Cross-origin child frames introduce themselves to this frame, so the
+  // outline can say where each one sits and clicks can be offset correctly.
+  const frameIds = new WeakMap(); // iframe element -> browser frameId
+  window.addEventListener("message", (e) => {
+    const id = e.data?.__tetherFrameHello;
+    if (id == null) return;
+    for (const f of document.querySelectorAll("iframe, frame")) {
+      if (f.contentWindow === e.source) { frameIds.set(f, id); break; }
+    }
+  });
 
   // ------------------------------------------------------------ refs
 
@@ -127,7 +140,7 @@
     return line;
   }
 
-  function snapshot({ maxLines = 400 } = {}) {
+  function snapshot({ maxLines = 400, root } = {}) {
     const lines = [];
     let truncated = false;
     let buf = "";
@@ -182,8 +195,14 @@
         if (doc?.body) {
           emit(`frame ${q(clip(el.title || el.name || new URL(el.src || "about:blank", location.href).host))}:`);
           depth++; walk(doc.body); flush(); depth--;
+        } else if (frameIds.has(el)) {
+          // The background splices that frame's own outline in here.
+          let host = "";
+          try { host = new URL(el.src, location.href).host; } catch {}
+          emit(`frame ${q(clip(el.title || el.name || host, 80))}:`);
+          emit(`  @@frame:${frameIds.get(el)}@@`);
         } else {
-          emit(`frame ${q(clip(el.src, 80))} (cross-origin, not readable here)`);
+          emit(`frame ${q(clip(el.src, 80))} (cross-origin, not loaded yet)`);
         }
         return;
       }
@@ -234,8 +253,9 @@
       else buf += " ";
     }
 
-    walk(document.body || document.documentElement);
+    walk(root || document.body || document.documentElement);
     flush();
+    if (root) return { text: lines.join("\n") };
 
     const head = [`Page: ${document.title}`, `URL: ${location.href}`];
     const sel = window.getSelection()?.toString();
@@ -510,7 +530,7 @@
   let lastActivity = "";
 
   function ensurePill() {
-    if (pillHost?.isConnected) return;
+    if (!IS_TOP || pillHost?.isConnected) return;
     // A pill left by this script's previous copy (the extension was reloaded) goes first.
     for (const old of document.querySelectorAll("[data-tether-pill]")) old.remove();
     pillHost = document.createElement("div");
@@ -535,6 +555,12 @@
         .t { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .s { color: #a9a49b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .s:empty { display: none; }
+        .pill.ask { max-width: 400px; align-items: flex-start; }
+        .pill.ask .s { white-space: normal; color: #ece8e1; margin-top: 2px; }
+        .pill.ask .dot { margin-top: 4px; }
+        .pill.ask button.act { background: #e8a33d; color: #22180a; font-weight: 500; }
+        .pill.ask button.act:hover { background: #f0b357; }
+        button[hidden] { display: none; }
         button {
           flex: none; margin-left: 4px; padding: 5px 10px;
           background: #2a2825; color: #ece8e1; border: 0; border-radius: 8px;
@@ -554,25 +580,44 @@
       <div class="pill" role="status">
         <span class="dot" aria-hidden="true"></span>
         <div class="lines"><div class="t"></div><div class="s"></div></div>
-        <button type="button" title="Stop sharing this tab">Stop</button>
+        <button type="button" class="act" hidden></button>
+        <button type="button" class="stop" title="Stop sharing and recording this tab">Stop</button>
       </div>`;
     pillText = pillRoot.querySelector(".t");
     pillSub = pillRoot.querySelector(".s");
     hl = pillRoot.querySelector(".hl");
-    pillRoot.querySelector("button").addEventListener("click", () => api.runtime.sendMessage({ type: "stop" }));
-    pillRoot.querySelector("button").title = "Stop sharing and recording this tab";
+    pillRoot.querySelector("button.stop").addEventListener("click", () => api.runtime.sendMessage({ type: "stop" }));
+    // Pause, Resume, or Done when the agent asked for help.
+    pillRoot.querySelector("button.act").addEventListener("click", () => api.runtime.sendMessage({ type: paused ? "resume" : "pause" }));
     (document.body || document.documentElement).appendChild(pillHost);
     renderPill();
   }
 
   let shared = false;
   let recording = false;
+  let paused = null; // { by: "user" | "agent", agent, message }
 
   function renderPill() {
     if (!pillText) return;
-    if (shared) {
+    const act = pillRoot.querySelector("button.act");
+    const pill = pillRoot.querySelector(".pill");
+    pill.classList.toggle("ask", !!(paused && paused.by === "agent"));
+    act.hidden = !shared;
+    if (shared && paused?.by === "agent") {
+      pillText.textContent = `${paused.agent || "Your agent"} needs you`;
+      pillSub.textContent = paused.message || "Take care of this page, then press Done.";
+      act.textContent = "Done";
+      act.title = "Hand the tab back to the agent";
+    } else if (shared && paused) {
+      pillText.textContent = "Paused";
+      pillSub.textContent = `${agents.length ? agents.join(" and ") : "The agent"} will wait until you resume`;
+      act.textContent = "Resume";
+      act.title = "Let the agent continue";
+    } else if (shared) {
       pillText.textContent = (agents.length ? `Shared with ${agents.join(" and ")}` : "Shared, waiting for an agent") + (recording ? " · recording" : "");
       pillSub.textContent = lastActivity;
+      act.textContent = "Pause";
+      act.title = "Hold the agent while you do something here";
     } else {
       pillText.textContent = "Recording this visit";
       pillSub.textContent = "Clicks, typing and page structure, for your agent";
@@ -586,6 +631,7 @@
   }
 
   function flash(el) {
+    if (!IS_TOP) return;
     ensurePill();
     const r = el.getBoundingClientRect();
     Object.assign(hl.style, { left: r.left - 3 + "px", top: r.top - 3 + "px", width: r.width + 6 + "px", height: r.height + 6 + "px" });
@@ -789,9 +835,222 @@
     updatePill();
   }
 
+  // ------------------------------------------------------------ media
+  // Images, video, audio, canvases and CSS background images on the page.
+  // blob: URLs are read here, where the page's origin can still fetch them,
+  // and handed over in chunks.
+
+  function listMedia({ limit = 300 } = {}) {
+    const items = [];
+    const seen = new Set();
+    const add = (o) => {
+      const key = o.kind + (o.url || o.ref);
+      if (items.length >= limit || seen.has(key)) return;
+      seen.add(key);
+      items.push(o);
+    };
+    const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+    for (const v of document.querySelectorAll("video, audio")) {
+      const url = v.currentSrc || v.src || "";
+      add({
+        kind: v.tagName.toLowerCase(), url, ref: refFor(v),
+        sources: [...v.querySelectorAll("source")].map((x) => x.src).filter(Boolean),
+        duration: Number.isFinite(v.duration) ? Math.round(v.duration) : null,
+        time: Math.round(v.currentTime || 0), paused: v.paused,
+        w: v.videoWidth || undefined, h: v.videoHeight || undefined,
+        streamed: url.startsWith("blob:") || !!v.srcObject, visible: vis(v),
+        name: clip(nameOf(v) || v.title || "", 80),
+      });
+    }
+    for (const img of document.images) {
+      const url = img.currentSrc || img.src;
+      if (!url) continue;
+      add({ kind: "image", url, ref: refFor(img), alt: clip(img.alt || "", 80), w: img.naturalWidth, h: img.naturalHeight, visible: vis(img) });
+    }
+    for (const c of document.querySelectorAll("canvas")) {
+      if (c.width * c.height < 4096) continue;
+      add({ kind: "canvas", ref: refFor(c), w: c.width, h: c.height, visible: vis(c) });
+    }
+    let n = 0;
+    for (const el of document.querySelectorAll("body *")) {
+      if (++n > 4000 || items.length >= limit) break;
+      const bg = getComputedStyle(el).backgroundImage;
+      if (!bg || bg === "none" || !bg.includes("url(")) continue;
+      for (const m of bg.matchAll(/url\(["']?(.*?)["']?\)/g)) {
+        if (m[1].startsWith("data:image/svg")) continue;
+        try { add({ kind: "background", url: new URL(m[1], location.href).href, ref: refFor(el), visible: vis(el) }); } catch {}
+      }
+    }
+    return { items };
+  }
+
+  const blobCache = new Map(); // url -> { buf, type }
+
+  async function mediaRead({ url, ref, offset = 0, size = 4 * 1024 * 1024 }) {
+    let entry = blobCache.get(url || ref);
+    if (!entry) {
+      if (ref && !url) {
+        const el = byRef(ref);
+        if (el.tagName !== "CANVAS") throw new Error(`${label(el)} has no file to save.`);
+        let dataUrl;
+        try { dataUrl = el.toDataURL("image/png"); } catch { throw new Error("This canvas shows content from another site, so the browser won't let it be read. Use screenshot instead."); }
+        const bin = atob(dataUrl.split(",")[1]);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        entry = { buf: bytes.buffer, type: "image/png" };
+      } else {
+        let res;
+        try { res = await fetch(url); } catch {
+          throw new Error("This blob can't be read. Video that streams through MediaSource has no single file behind it: save the stream (the .m3u8 or .mpd in list_media) instead.");
+        }
+        const blob = await res.blob();
+        entry = { buf: await blob.arrayBuffer(), type: blob.type || res.headers.get("content-type") || "application/octet-stream" };
+      }
+      blobCache.set(url || ref, entry);
+      setTimeout(() => blobCache.delete(url || ref), 120000);
+    }
+    const bytes = new Uint8Array(entry.buf, offset, Math.max(0, Math.min(size, entry.buf.byteLength - offset)));
+    let bin = "";
+    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return { total: entry.buf.byteLength, type: entry.type, data: btoa(bin) };
+  }
+
+  // The current frame of a video. Cross-origin video can't be read this way;
+  // then the caller crops a screenshot instead.
+  async function videoFrame({ ref }) {
+    const v = byRef(ref);
+    if (v.tagName !== "VIDEO") throw new Error(`${label(v)} is not a video.`);
+    await reveal(v);
+    const r = v.getBoundingClientRect();
+    const viewport = { x: r.left, y: r.top, width: r.width, height: r.height, vw: innerWidth, vh: innerHeight };
+    try {
+      const c = document.createElement("canvas");
+      c.width = v.videoWidth;
+      c.height = v.videoHeight;
+      c.getContext("2d").drawImage(v, 0, 0);
+      return { dataUrl: c.toDataURL("image/jpeg", 0.9), time: v.currentTime, viewport };
+    } catch {
+      return { blocked: true, time: v.currentTime, viewport };
+    }
+  }
+
+  // ------------------------------------------------------------ element picker
+  // The user points at something on the page and sends it to the agent with a
+  // note. The agent gets the element's details and a cropped screenshot.
+
+  let picker = null;
+
+  function startPicker() {
+    if (!IS_TOP || picker) return;
+    const host = document.createElement("div");
+    host.setAttribute("data-tether-pill", "");
+    host.style.cssText = "all:initial;position:fixed;inset:0;z-index:2147483647;pointer-events:none;";
+    const root = host.attachShadow({ mode: "closed" });
+    root.innerHTML = `
+      <style>
+        :host { all: initial; }
+        .box { position: fixed; border-radius: 4px; box-shadow: 0 0 0 2px #e8a33d, 0 0 0 9999px rgb(0 0 0 / .18); pointer-events: none; }
+        .tag { position: fixed; padding: 3px 8px; border-radius: 6px; background: #1e1d1a; color: #ece8e1; font: 400 12px/1.3 system-ui, "Segoe UI", sans-serif; pointer-events: none; white-space: nowrap; max-width: 60vw; overflow: hidden; text-overflow: ellipsis; }
+        .hint { position: fixed; left: 50%; top: 16px; transform: translateX(-50%); padding: 8px 12px; border-radius: 10px; background: #1e1d1a; color: #ece8e1; font: 400 12.5px/1.35 system-ui, "Segoe UI", sans-serif; box-shadow: 0 8px 24px rgb(0 0 0 / .28); pointer-events: none; }
+        .panel { position: fixed; width: 320px; padding: 12px; border-radius: 12px; background: #1e1d1a; color: #ece8e1; box-shadow: 0 8px 24px rgb(0 0 0 / .3); border: 1px solid rgb(236 232 225 / .1); font: 400 13px/1.4 system-ui, "Segoe UI", sans-serif; pointer-events: auto; display: grid; gap: 10px; }
+        .panel p { margin: 0; color: #a9a49b; font-size: 12.5px; }
+        textarea { width: 100%; box-sizing: border-box; min-height: 72px; resize: vertical; font: inherit; color: #ece8e1; background: #161513; border: 1px solid rgb(236 232 225 / .1); border-radius: 8px; padding: 8px 10px; }
+        textarea:focus { outline: none; border-color: #e8a33d; }
+        .row { display: flex; gap: 8px; justify-content: flex-end; }
+        button { font: inherit; border: 0; border-radius: 8px; padding: 7px 12px; cursor: pointer; background: #2a2825; color: #ece8e1; }
+        button.primary { background: #e8a33d; color: #22180a; font-weight: 500; }
+        button:focus-visible { outline: 2px solid #e8a33d; outline-offset: 2px; }
+      </style>
+      <div class="box" hidden></div><div class="tag" hidden></div>
+      <div class="hint">Click the part of the page you mean. Esc to cancel.</div>`;
+    (document.body || document.documentElement).appendChild(host);
+    const box = root.querySelector(".box"), tag = root.querySelector(".tag"), hint = root.querySelector(".hint");
+    picker = { host, root, target: null, chosen: null };
+
+    const show = (el) => {
+      const r = el.getBoundingClientRect();
+      Object.assign(box.style, { left: r.left - 2 + "px", top: r.top - 2 + "px", width: r.width + 4 + "px", height: r.height + 4 + "px" });
+      box.hidden = false;
+      tag.textContent = label(el);
+      tag.hidden = false;
+      Object.assign(tag.style, { left: Math.max(8, r.left) + "px", top: (r.top > 32 ? r.top - 28 : r.bottom + 6) + "px" });
+    };
+    const under = (e) => {
+      host.style.display = "none";
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      host.style.display = "";
+      return el && el !== document.documentElement ? el : null;
+    };
+    const onMove = (e) => {
+      if (picker.chosen) return;
+      const el = under(e);
+      if (el && el !== picker.target) { picker.target = el; show(el); }
+    };
+    const onClick = (e) => {
+      if (picker.chosen || e.composedPath().includes(host)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const el = under(e);
+      if (!el) return;
+      picker.chosen = el;
+      show(el);
+      hint.remove();
+      openPanel(el);
+    };
+    const onKey = (e) => { if (e.key === "Escape") stopPicker(); };
+    const swallow = (e) => { if (!picker.chosen && !e.composedPath().includes(host)) { e.preventDefault(); e.stopPropagation(); } };
+    picker.off = () => {
+      removeEventListener("mousemove", onMove, true);
+      removeEventListener("click", onClick, true);
+      removeEventListener("keydown", onKey, true);
+      for (const t of ["mousedown", "mouseup", "pointerdown", "pointerup"]) removeEventListener(t, swallow, true);
+    };
+    addEventListener("mousemove", onMove, true);
+    addEventListener("click", onClick, true);
+    addEventListener("keydown", onKey, true);
+    for (const t of ["mousedown", "mouseup", "pointerdown", "pointerup"]) addEventListener(t, swallow, true);
+
+    function openPanel(el) {
+      const r = el.getBoundingClientRect();
+      const panel = document.createElement("div");
+      panel.className = "panel";
+      panel.innerHTML = `<textarea placeholder="What about this? “Make this bigger”, “watch this price”, “why is this broken?”"></textarea>
+        <p>Sends this element, its details and a screenshot to your agent, and shares the tab.</p>
+        <div class="row"><button type="button" class="cancel">Cancel</button><button type="button" class="primary send">Send</button></div>`;
+      const left = Math.min(Math.max(8, r.left), innerWidth - 336);
+      const below = r.bottom + 12 + 190 < innerHeight;
+      Object.assign(panel.style, { left: left + "px", top: (below ? r.bottom + 12 : Math.max(8, r.top - 202)) + "px" });
+      root.appendChild(panel);
+      const ta = panel.querySelector("textarea");
+      ta.focus();
+      panel.querySelector(".cancel").addEventListener("click", stopPicker);
+      panel.querySelector(".send").addEventListener("click", async () => {
+        const text = ta.value.trim();
+        const rect = el.getBoundingClientRect();
+        const element = {
+          ...describeTarget(el),
+          text: clip(el.innerText || "", 400),
+          html: (el.outerHTML || "").slice(0, 4000),
+          outline: snapshot({ root: el, maxLines: 80 }).text,
+          viewport: { x: rect.left, y: rect.top, width: rect.width, height: rect.height, dpr: devicePixelRatio, vw: innerWidth, vh: innerHeight },
+        };
+        stopPicker();
+        await new Promise((r2) => requestAnimationFrame(() => requestAnimationFrame(r2)));
+        api.runtime.sendMessage({ type: "pickSend", text, element });
+      });
+    }
+  }
+
+  function stopPicker() {
+    if (!picker) return;
+    picker.off();
+    picker.host.remove();
+    picker = null;
+  }
+
   // ------------------------------------------------------------ wiring
 
-  const handlers = { snapshot, readText, locate, focusFor, click, hover, type, fill, select, press, scroll, waitFor, upload };
+  const handlers = { snapshot, readText, locate, focusFor, click, hover, type, fill, select, press, scroll, waitFor, upload, listMedia, mediaRead, videoFrame };
 
   api.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg.agents) agents = msg.agents;
@@ -814,8 +1073,15 @@
         if (pillHost) pillHost.style.display = msg.hidden ? "none" : "";
         sendResponse({ ok: true });
         return;
+      case "paused":
+        paused = msg.paused || null;
+        shared = true;
+        updatePill();
+        sendResponse({ ok: true });
+        return;
       case "unshared":
         shared = false;
+        paused = null;
         updatePill();
         sendResponse({ ok: true });
         return;
@@ -823,6 +1089,28 @@
         msg.on ? startRecording(msg) : stopRecording();
         sendResponse({ ok: true });
         return;
+      case "pick":
+        startPicker();
+        sendResponse({ ok: true });
+        return;
+      case "frameHello":
+        // Tell the parent frame which iframe element is this frame.
+        if (!IS_TOP) window.parent.postMessage({ __tetherFrameHello: msg.frameId }, "*");
+        sendResponse({ ok: true });
+        return;
+      case "frameRect": {
+        // Where a child frame's content starts, in this frame's viewport.
+        let rect = null;
+        for (const f of document.querySelectorAll("iframe, frame")) {
+          if (frameIds.get(f) === msg.childFrameId) {
+            const r = f.getBoundingClientRect();
+            rect = { x: r.left + f.clientLeft, y: r.top + f.clientTop };
+            break;
+          }
+        }
+        sendResponse({ rect });
+        return;
+      }
       case "recNav":
         // Single-page apps change the URL without a load.
         if (recording) {
@@ -887,6 +1175,8 @@
     agents = s.agents || [];
     if (s.activity) lastActivity = `${s.activity.agent} ${s.activity.summary}`;
     shared = !!s.shared;
+    paused = s.paused || null;
+    if (!IS_TOP) return;
     if (s.recording) startRecording(s.recording);
     else updatePill();
   });

@@ -5,6 +5,7 @@ import { safeEqual } from "./config.js";
 import { list, importText } from "./scripts.js";
 import { ingest } from "./sites.js";
 import { saveRequest, listRequests } from "./requests.js";
+import { listWatchers, watcherSummary } from "./watchers.js";
 
 const EXT_ORIGIN = /^(chrome-extension|moz-extension|safari-web-extension):\/\//;
 
@@ -64,6 +65,21 @@ export class Hub {
       if (msg.type === "rec") {
         try { ingest(browser.key, msg.events || []); } catch (e) { this.log("recording write failed:", e.message); }
         if (msg.ack) ws.send(JSON.stringify({ type: "recAck", ack: msg.ack }));
+        return;
+      }
+      if (msg.type === "rpc") {
+        // Calls from the extension's own pages (settings, popup) to the host.
+        (async () => {
+          let result, error;
+          try {
+            const fn = this.rpc?.[msg.method];
+            if (!fn) throw new Error(`Unknown host call ${msg.method}`);
+            result = await fn(msg.params || {}, browser);
+          } catch (e) {
+            error = e.message || String(e);
+          }
+          if (ws.readyState === 1) ws.send(JSON.stringify({ type: "rpcResult", nonce: msg.nonce, result, error }));
+        })();
         return;
       }
       if (msg.type === "importItem") {
@@ -205,6 +221,12 @@ export class Hub {
       send(b, { type: "styles", styles });
     }
     this.pushRequests(browser);
+    this.pushWatchers(browser);
+  }
+
+  pushWatchers(browser) {
+    const watchers = listWatchers().map(watcherSummary);
+    for (const b of browser ? [browser] : this.browsers.values()) send(b, { type: "watchers", watchers });
   }
 
   pushRequests(browser) {

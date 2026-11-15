@@ -83,6 +83,27 @@ await sw.evaluate((id) => chrome.tabs.sendMessage(id, { cmd: "activity", agent: 
 await wait(300);
 await tab.screenshot({ path: path.join(out, "page-pill.png") });
 
+// The agent hands the tab to the user.
+await sw.evaluate((id) => pauseTab(id, { by: "agent", agent: "Claude Code", message: "Please type the 6-digit code from your phone, then press Done." }), tabId);
+await wait(300);
+await tab.screenshot({ path: path.join(out, "page-pill-ask.png"), clip: { x: 500, y: 520, width: 500, height: 120 } });
+await popup("paused-agent");
+await sw.evaluate((id) => { resumeTab(id, true); pauseTab(id, { by: "user" }); }, tabId);
+await wait(300);
+await tab.screenshot({ path: path.join(out, "page-pill-paused.png"), clip: { x: 500, y: 540, width: 500, height: 100 } });
+await sw.evaluate((id) => resumeTab(id, true), tabId);
+
+// Picker, mid-selection.
+await sw.evaluate((id) => startPick(id), tabId);
+await wait(300);
+await tab.mouse.move(150, 130);
+await wait(200);
+await tab.mouse.click(150, 130);
+await wait(300);
+await tab.keyboard.type("Make this heading match our brand orange");
+await tab.screenshot({ path: path.join(out, "picker.png") });
+await tab.keyboard.press("Escape");
+
 const prompt = await ctx.newPage();
 await prompt.setViewportSize({ width: 400, height: 300 });
 await wait(300);

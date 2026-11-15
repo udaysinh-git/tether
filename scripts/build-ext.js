@@ -21,12 +21,12 @@ const targets = {
     ...base,
     minimum_chrome_version: "120",
     background: { service_worker: "background.js" },
-    permissions: ["tabs", "activeTab", "scripting", "storage", "unlimitedStorage", "debugger", "webRequest", "webNavigation", "cookies", "userScripts", "alarms"],
+    permissions: ["tabs", "activeTab", "scripting", "storage", "unlimitedStorage", "debugger", "webRequest", "webNavigation", "cookies", "userScripts", "alarms", "downloads", "notifications"],
   },
   firefox: {
     ...base,
     background: { scripts: ["background.js"] },
-    permissions: ["tabs", "activeTab", "scripting", "storage", "unlimitedStorage", "webRequest", "webRequestBlocking", "webNavigation", "cookies", "alarms", "nativeMessaging"],
+    permissions: ["tabs", "activeTab", "scripting", "storage", "unlimitedStorage", "webRequest", "webRequestBlocking", "webNavigation", "cookies", "alarms", "nativeMessaging", "downloads", "notifications"],
     optional_permissions: ["userScripts"],
     // Firefox's MV3 default adds upgrade-insecure-requests, which turns the
     // ws://127.0.0.1 connection to the host into wss:// and breaks it.

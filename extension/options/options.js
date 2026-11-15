@@ -5,6 +5,17 @@ const isFirefox = typeof globalThis.browser !== "undefined" && !!api.runtime.get
 const send = (msg) => api.runtime.sendMessage(msg).then((r) => { if (r?.error) throw new Error(r.error); return r; });
 const where = (m) => (m.length ? m.map((x) => (x === "<all_urls>" || x === "*://*/*" ? "every site" : x)).join(", ") : "every site");
 
+const rpc = (method, params = {}) => send({ type: "hostRpc", method, params }).then((r) => r.result);
+let gallery = {};
+
+function siteOf(matches) {
+  for (const m of matches) {
+    const h = String(m).match(/([a-z0-9-]+\.)+[a-z]{2,}(:\d+)?|localhost(:\d+)?|\d+\.\d+\.\d+\.\d+(:\d+)?/i);
+    if (h) return h[0].replace(/^www\./, "");
+  }
+  return "Every site";
+}
+
 function itemRow(kind, s) {
   const how = kind === "style" ? `On ${where(s.matches)}` : s.run === "auto" ? `Runs on every visit to ${where(s.matches)}` : `Run from the popup on ${where(s.matches)}`;
   const note = s.unsupported ? ` · ${esc(s.unsupported)}` : "";
@@ -13,8 +24,11 @@ function itemRow(kind, s) {
       <p class="name">${esc(s.name)} <span class="faint">v${esc(s.version)}${s.imported ? " · imported" : ""}</span></p>
       ${s.description ? `<p class="muted">${esc(s.description)}</p>` : ""}
       <p class="faint">${esc(how)}${note}</p>
+      ${gallery[`${kind}:${s.id}`]?.before ? `<div class="shots"><figure><img data-shot="${esc(s.id)}" data-which="before" data-kind="${kind}" alt="Before" /><figcaption>Before</figcaption></figure><figure><img data-shot="${esc(s.id)}" data-which="after" data-kind="${kind}" alt="After" /><figcaption>After</figcaption></figure></div>` : ""}
     </div>
     <button class="quiet" data-export="${esc(s.id)}" data-kind="${kind}" title="Download the ${kind === "style" ? ".user.css for Stylus" : ".user.js for Tampermonkey"}">Download</button>
+    ${gallery[`${kind}:${s.id}`]?.gist ? `<a href="${esc(gallery[`${kind}:${s.id}`].gist.raw)}" target="_blank" rel="noopener" title="Install link for Tampermonkey or Stylus">Gist</a>` : ""}
+    <button class="quiet" data-publish="${esc(s.id)}" data-kind="${kind}" title="Publish as a secret GitHub Gist">${gallery[`${kind}:${s.id}`]?.gist ? "Update Gist" : "Publish"}</button>
     ${kind === "style" || s.run === "auto" ? `<button class="switch" role="switch" aria-checked="${s.on}" aria-label="${esc(s.name)}" data-toggle="${esc(s.id)}" data-kind="${kind}"></button>` : ""}
   </div>`;
 }
@@ -42,14 +56,54 @@ async function load() {
     ? `<p class="muted" style="margin-bottom:6px">Always recorded:</p>` + autoRecord.map((h) => `<div class="script line" style="align-items:center"><p class="grow">${esc(h)}</p><button class="quiet" data-host="${esc(h)}">Stop</button></div>`).join("")
     : `<p class="muted">No site is recorded automatically. Turn it on per site from the popup.</p>`;
 
-  $("styles").innerHTML = st.allStyles.length
-    ? st.allStyles.map((s) => itemRow("style", s)).join("")
-    : `<p class="muted">No styles yet. Open a site, click Tether, choose “Request a change” and describe or paste the look you want.</p>`;
+  try { gallery = (await rpc("galleryIndex")) || {}; } catch { gallery = {}; }
+  const bySite = new Map();
+  for (const [kind, list] of [["style", st.allStyles], ["script", st.allScripts]]) {
+    for (const s of list) {
+      const site = siteOf(s.matches);
+      if (!bySite.has(site)) bySite.set(site, []);
+      bySite.get(site).push(itemRow(kind, s));
+    }
+  }
+  $("gallery").innerHTML = bySite.size
+    ? [...bySite].sort((a, b) => (a[0] === "Every site") - (b[0] === "Every site") || a[0].localeCompare(b[0])).map(([site, rows]) => `<h3 class="site">${esc(site)}</h3>${rows.join("")}`).join("")
+    : `<p class="muted">Nothing yet. Open a site, click Tether and choose “Request a change”, or ask your agent for a script.</p>`;
+  for (const img of document.querySelectorAll("img[data-shot]")) {
+    rpc("galleryImage", { kind: img.dataset.kind, id: img.dataset.shot, which: img.dataset.which }).then((r) => { if (r?.dataUrl) img.src = r.dataUrl; }, () => {});
+  }
 
-  $("scripts").innerHTML = st.allScripts.length
-    ? st.allScripts.map((s) => itemRow("script", s)).join("")
-    : `<p class="muted">No scripts yet. Ask your agent for one, for example “make me a script that fills this form with my usual details”.</p>`;
+  const ws = st.allWatchers || [];
+  $("watchers").innerHTML = ws.length
+    ? ws.map((w) => `<div class="script line" style="align-items:center">
+        <div class="grow">
+          <p class="name">${esc(w.name)}</p>
+          <p class="faint">Every ${w.every} min · ${w.mode === "tab" ? "opens the page" : "fetches"} ${esc(w.url)} · ${esc(w.notify.join(" and "))}</p>
+          <p class="muted">${w.last ? (w.last.ok ? esc(w.last.message || "checked") : "Last check failed: " + esc(w.last.error || "")) : "Not checked yet"}</p>
+        </div>
+        <button class="quiet" data-watch-run="${esc(w.id)}">Check now</button>
+        <button class="quiet" data-watch-del="${esc(w.id)}">Delete</button>
+        <button class="switch" role="switch" aria-checked="${w.enabled}" aria-label="${esc(w.name)}" data-watch="${esc(w.id)}"></button>
+      </div>`).join("")
+    : `<p class="muted">No watchers. Ask your agent, for example “tell me when the price on this page drops below 2000”.</p>`;
+
+  try {
+    const hs = await rpc("getSettings");
+    $("ntfyTopic").value = hs.ntfyTopic;
+    $("ntfyServer").value = hs.ntfyServer;
+    $("gistAccount").value = hs.gistAccount;
+  } catch {}
 }
+
+$("hostSettings").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  try {
+    await rpc("setSettings", { ntfyTopic: $("ntfyTopic").value, ntfyServer: $("ntfyServer").value, gistAccount: $("gistAccount").value });
+    $("hostSaved").textContent = "Saved.";
+  } catch (err) {
+    $("hostSaved").textContent = err.message;
+  }
+  setTimeout(() => ($("hostSaved").textContent = ""), 3000);
+});
 
 $("conn").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -101,6 +155,32 @@ document.addEventListener("click", async (e) => {
   if (t.dataset.toggle) {
     const on = flip(t);
     return send({ type: t.dataset.kind === "style" ? "toggleStyle" : "toggleScript", id: t.dataset.toggle, on });
+  }
+  if (t.dataset.watch) {
+    const on = flip(t);
+    return rpc("setWatcherEnabled", { id: t.dataset.watch, on });
+  }
+  if (t.dataset.watchRun) {
+    t.disabled = true;
+    try { await rpc("runWatcher", { id: t.dataset.watchRun }); } catch (err) { alert(err.message); }
+    return load();
+  }
+  if (t.dataset.watchDel) {
+    if (!confirm("Delete this watcher?")) return;
+    await rpc("deleteWatcher", { id: t.dataset.watchDel });
+    return load();
+  }
+  if (t.dataset.publish) {
+    const again = t.textContent.includes("Update");
+    if (!again && !confirm("Publish this as a secret GitHub Gist? It won't be listed, but anyone with the link can see and install it.")) return;
+    t.disabled = true;
+    try {
+      const g = await rpc("publishGist", { kind: t.dataset.kind, id: t.dataset.publish });
+      $("publishResult").innerHTML = `Published. Install link: <a href="${esc(g.raw)}" target="_blank" rel="noopener">${esc(g.raw)}</a>`;
+    } catch (err) {
+      $("publishResult").textContent = err.message;
+    }
+    return load();
   }
   if (t.dataset.export) {
     const r = await send({ type: "exportItem", id: t.dataset.export, kind: t.dataset.kind });

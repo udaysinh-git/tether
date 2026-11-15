@@ -40,7 +40,25 @@ export function loadConfig() {
 
 export function saveConfig(cfg) {
   fs.mkdirSync(HOME, { recursive: true });
-  fs.writeFileSync(CONFIG_FILE, JSON.stringify({ port: cfg.port, key: cfg.key }, null, 2));
+  let onDisk = {};
+  try { onDisk = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8")); } catch {}
+  // TETHER_PORT is a per-run override; don't persist it.
+  const out = { ...onDisk, ...cfg };
+  if (process.env.TETHER_PORT && onDisk.port) out.port = onDisk.port;
+  fs.writeFileSync(CONFIG_FILE, JSON.stringify(out, null, 2));
+}
+
+// Optional settings: ntfyTopic, ntfyServer, gistAccount.
+export function setSetting(name, value) {
+  const cfg = loadConfig();
+  if (value === "" || value == null) delete cfg[name];
+  else cfg[name] = value;
+  let onDisk = {};
+  try { onDisk = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8")); } catch {}
+  if (value === "" || value == null) delete onDisk[name];
+  else onDisk[name] = value;
+  fs.writeFileSync(CONFIG_FILE, JSON.stringify(onDisk, null, 2));
+  return cfg;
 }
 
 export function rotateKey() {

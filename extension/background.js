@@ -27,6 +27,7 @@ const state = {
   bypass: false, // user-approved access to every tab, for this browser session
   standby: false, // connected and waiting for an agent to ask for a session
   agentWindows: new Set(), // windows opened for an agent; their tabs are shared
+  paused: new Map(), // tabId -> { by: "user" | "agent", agent, message, since }
   styles: [],
   disabledStyles: new Set(), // style ids the user switched off in this browser
   disabledScripts: new Set(), // script ids the user switched off in this browser
@@ -54,13 +55,7 @@ const ready = init();
 // ---------------------------------------------------------------- setup
 
 async function init() {
-  const saved = (await api.storage.session.get("shared")).shared || {};
-  for (const [id, v] of Object.entries(saved)) {
-    try {
-      await api.tabs.get(Number(id));
-      state.shared.set(Number(id), v);
-    } catch {}
-  }
+  for (const [id, v] of await restore("shared")) state.shared.set(id, v);
   state.bypass = !!(await api.storage.session.get("bypass")).bypass;
   const local = await api.storage.local.get(["scripts", "styles", "disabledStyles", "disabledScripts", "autoRecord", "recordValues", "recQueue", "pendingRequests", "requests"]);
   state.disabledScripts = new Set(local.disabledScripts || []);
@@ -72,16 +67,14 @@ async function init() {
   state.recQueue = local.recQueue || [];
   state.pendingRequests = local.pendingRequests || [];
   state.requests = local.requests || [];
-  const rec = (await api.storage.session.get("recording")).recording || {};
-  for (const [id, v] of Object.entries(rec)) {
-    try { await api.tabs.get(Number(id)); state.recording.set(Number(id), v); } catch {}
-  }
+  for (const [id, v] of await restore("recording")) state.recording.set(id, v);
   await checkUserScripts();
   for (const id of state.shared.keys()) {
     setBadge(id, true);
     attachCdp(id);
   }
-  for (const w of (await api.storage.session.get("agentWindows")).agentWindows || []) {
+  const wins = (await api.storage.session.get("agentWindows")).agentWindows ?? (await api.storage.local.get("keep_agentWindows")).keep_agentWindows ?? [];
+  for (const w of wins) {
     try { await api.windows.get(w); state.agentWindows.add(w); } catch {}
   }
   const s = await settings();
@@ -257,6 +250,11 @@ async function onHostMessage(sock, raw) {
       await api.storage.local.set({ requests: state.requests });
       broadcast();
       break;
+    case "watchers":
+      state.watchers = msg.watchers || [];
+      broadcast();
+      break;
+    case "rpcResult":
     case "importResult":
     case "requestSaved": {
       const w = requestWaiters.get(msg.nonce);
@@ -303,6 +301,7 @@ async function share(tabId, by = "user") {
 async function unshare(tabId) {
   if (!state.shared.has(tabId)) return;
   state.shared.delete(tabId);
+  if (state.paused.has(tabId)) resumeTab(tabId, false);
   state.activity.delete(tabId);
   state.net.delete(tabId);
   state.console.delete(tabId);
@@ -350,12 +349,132 @@ async function requestBypass(agent, reason) {
   return { granted, note: granted ? "The user turned on bypass mode. Every tab is now available." : "The user declined. Only shared tabs are available." };
 }
 
+// ---------------------------------------------------------------- downloads
+// Only downloads that start while something is shared (or bypass is on) are
+// tracked, so the agent never sees the user's download history.
+
+const downloads = new Map(); // id -> { id, url, filename, state, bytes, mime, started, error }
+const downloadWaiters = [];
+
+function trackDownload(item) {
+  const d = downloads.get(item.id) || { id: item.id, started: Date.now() };
+  if (item.url) d.url = item.finalUrl || item.url;
+  if (item.filename) d.filename = typeof item.filename === "string" ? item.filename : item.filename.current;
+  if (item.state) d.state = typeof item.state === "string" ? item.state : item.state.current;
+  if (item.mime) d.mime = item.mime;
+  if (item.totalBytes != null && item.totalBytes >= 0) d.bytes = item.totalBytes;
+  if (item.fileSize != null && item.fileSize >= 0) d.bytes = item.fileSize;
+  if (item.error) d.error = typeof item.error === "string" ? item.error : item.error.current;
+  downloads.set(item.id, d);
+  if (d.state === "complete" || d.state === "interrupted") {
+    for (const w of downloadWaiters.splice(0)) w.check();
+  }
+  return d;
+}
+
+if (api.downloads) {
+  api.downloads.onCreated.addListener((item) => {
+    if (!(state.shared.size || state.bypass)) return;
+    trackDownload(item);
+  });
+  api.downloads.onChanged.addListener(async (delta) => {
+    if (!downloads.has(delta.id)) return;
+    const [item] = await api.downloads.search({ id: delta.id });
+    if (item) trackDownload(item);
+  });
+}
+
+function waitDownload({ since = Date.now() - 15000, timeout = 60000 }) {
+  return new Promise((resolve) => {
+    const w = {
+      check() {
+        const done = [...downloads.values()].filter((d) => d.started >= since && (d.state === "complete" || d.state === "interrupted"));
+        if (done.length) {
+          clearTimeout(w.timer);
+          resolve(done.at(-1));
+          return true;
+        }
+        downloadWaiters.push(w);
+        return false;
+      },
+    };
+    w.timer = setTimeout(() => {
+      const i = downloadWaiters.indexOf(w);
+      if (i >= 0) downloadWaiters.splice(i, 1);
+      const pending = [...downloads.values()].filter((d) => d.started >= since);
+      resolve(pending.length ? { ...pending.at(-1), note: "still downloading" } : null);
+    }, timeout);
+    w.check();
+  });
+}
+
+async function downloadUrl({ url, filename }) {
+  const host = hostOf(url);
+  let ok = state.bypass;
+  for (const id of state.shared.keys()) {
+    if (ok) break;
+    try { ok = hostOf((await api.tabs.get(id)).url) === host; } catch {}
+  }
+  if (!ok) throw new Error(`Downloads are limited to sites of shared tabs (${host} isn't one). Share a tab on that site or ask for bypass mode.`);
+  const since = Date.now() - 1000;
+  const id = await api.downloads.download({ url, filename: filename || undefined, conflictAction: "uniquify", saveAs: false });
+  const [item] = await api.downloads.search({ id });
+  trackDownload({ ...item, id });
+  const d = await waitDownload({ since, timeout: 120000 });
+  return d;
+}
+
+// ---------------------------------------------------------------- pause
+// The user can pause a shared tab from the pill or popup; agent actions on it
+// are refused until they resume. An agent can also hand the tab to the user
+// (a CAPTCHA, a 2FA code, a login) with wait_for_user and continue on Done.
+
+const pauseWaiters = new Map(); // tabId -> [resolve]
+const READ_ONLY = new Set(["snapshot", "readText", "network", "networkDetail", "console", "cookies", "waitUser", "listMedia", "mediaInfo", "mediaRead", "videoFrame", "downloads"]);
+
+function pauseTab(tabId, info) {
+  state.paused.set(tabId, { ...info, since: Date.now() });
+  toContent(tabId, { cmd: "paused", paused: state.paused.get(tabId) }, false).catch(() => {});
+  broadcast();
+}
+
+function resumeTab(tabId, resumed = true) {
+  state.paused.delete(tabId);
+  for (const r of pauseWaiters.get(tabId) || []) r(resumed);
+  pauseWaiters.delete(tabId);
+  toContent(tabId, { cmd: "paused", paused: null }, false).catch(() => {});
+  broadcast();
+}
+
+async function waitUser(tabId, { agent, message, timeout = 300000 }) {
+  if (message) {
+    pauseTab(tabId, { by: "agent", agent, message });
+    const t = await api.tabs.update(tabId, { active: true }).catch(() => null);
+    if (t) api.windows.update(t.windowId, { focused: true }).catch(() => {});
+  } else if (!state.paused.has(tabId)) {
+    return { resumed: true, note: "The tab isn't paused." };
+  }
+  const resumed = await new Promise((resolve) => {
+    const list = pauseWaiters.get(tabId) || [];
+    list.push(resolve);
+    pauseWaiters.set(tabId, list);
+    setTimeout(() => resolve(null), timeout);
+  });
+  if (resumed === null) {
+    if (message && state.paused.get(tabId)?.by === "agent") resumeTab(tabId, false);
+    return { resumed: false, note: `The user hasn't responded after ${Math.round(timeout / 1000)}s.` };
+  }
+  if (!resumed) return { resumed: false, note: "The user stopped sharing the tab." };
+  return { resumed: true, note: message ? "The user pressed Done." : "The user resumed." };
+}
+
 // ---------------------------------------------------------------- agent sessions
 // An agent can ask for its own window (same logins, separate from the user's
 // tabs) or for the tab the user is looking at. Tabs in an agent window are shared.
 
 async function persistWindows() {
   await api.storage.session.set({ agentWindows: [...state.agentWindows] });
+  await api.storage.local.set({ keep_agentWindows: [...state.agentWindows] });
 }
 
 async function startSession({ agent, reason, url, mode = "window" }) {
@@ -416,7 +535,43 @@ function shareable(url = "") {
 
 async function persist() {
   await api.storage.session.set({ shared: Object.fromEntries(state.shared) });
+  await keep("shared", state.shared);
 }
+
+// Session storage is wiped when the extension reloads or updates. A copy in
+// local storage, with each tab's address, lets sharing survive that; tabs are
+// only restored if they still exist and are still on the same site.
+async function keep(key, map) {
+  const out = {};
+  for (const [id, v] of map) {
+    try { out[id] = { ...v, url: (await api.tabs.get(id)).url }; } catch {}
+  }
+  await api.storage.local.set({ ["keep_" + key]: out });
+}
+
+async function restore(key) {
+  const session = (await api.storage.session.get(key))[key];
+  const src = session ?? (await api.storage.local.get("keep_" + key))["keep_" + key] ?? {};
+  const out = [];
+  for (const [id, v] of Object.entries(src)) {
+    try {
+      const t = await api.tabs.get(Number(id));
+      if (!session && v.url && hostOf(v.url) !== hostOf(t.url)) continue;
+      const { url, ...rest } = v;
+      out.push([Number(id), rest]);
+    } catch {}
+  }
+  return out;
+}
+
+// A fresh browser start reuses tab ids for different tabs: forget the kept copies.
+api.runtime.onStartup.addListener(async () => {
+  await api.storage.local.remove(["keep_shared", "keep_recording", "keep_agentWindows"]);
+  await ready;
+  for (const id of [...state.shared.keys()]) await unshare(id);
+  for (const id of [...state.recording.keys()]) await stopRecording(id);
+  state.agentWindows.clear();
+});
 
 function setBadge(tabId, on) {
   api.action.setBadgeText({ tabId, text: on ? " " : "" }).catch(() => {});
@@ -581,6 +736,7 @@ const hostOf = (url) => { try { return new URL(url).host; } catch { return ""; }
 
 async function persistRec() {
   await api.storage.session.set({ recording: Object.fromEntries(state.recording) });
+  await keep("recording", state.recording);
 }
 
 async function startRecording(tabId, manual) {
@@ -610,6 +766,7 @@ async function stopRecording(tabId) {
 }
 
 async function autoRecordCheck(tabId, url) {
+  if (state.watchTabs?.has(tabId)) return;
   const host = hostOf(url);
   const r = state.recording.get(tabId);
   // Automatic sessions belong to one site; leaving it ends the session.
@@ -643,16 +800,207 @@ async function flushRec() {
 
 // ---------------------------------------------------------------- change requests
 
-async function sendRequest(tabId, text, images) {
+async function sendRequest(tabId, text, images, element) {
   const tab = await api.tabs.get(tabId);
   // The agent needs the tab to try changes on, so sending a request shares it.
   if (shareable(tab.url) && !state.shared.has(tabId)) await share(tabId);
-  const request = { text, images, url: tab.url, title: tab.title, tabId };
+  const request = { text, images, url: tab.url, title: tab.title, tabId, element };
   state.pendingRequests.push(request);
   await api.storage.local.set({ pendingRequests: state.pendingRequests });
   connect();
   const sent = await flushRequests(5000);
   return { queued: !sent };
+}
+
+// ---------------------------------------------------------------- media
+
+const MEDIA_RX = /\.(m3u8|mpd|mp4|m4v|webm|mov|mkv|mp3|m4a|aac|ogg|oga|opus|wav|flac)(\?|#|$)/i;
+const SEGMENT_RX = /\.(ts|m4s|cmfv|cmfa|aac)(\?|#|$)/i;
+state.media = new Map(); // tabId -> items with ids
+
+async function listMediaFor(tabId) {
+  const page = (await toContent(tabId, { cmd: "listMedia" })).items;
+  const net = state.net.get(tabId) || [];
+  const streams = [];
+  const segments = new Map();
+  for (const r of net) {
+    const mime = (r.mime || "").toLowerCase();
+    if (/mpegurl|dash\+xml/.test(mime) || /\.(m3u8|mpd)(\?|#|$)/i.test(r.url)) {
+      if (!streams.some((x) => x.url === r.url)) streams.push({ kind: "stream", url: r.url, format: /mpd|dash/i.test(r.url + mime) ? "DASH" : "HLS", status: r.status });
+    } else if (SEGMENT_RX.test(r.url)) {
+      const key = r.url.replace(/[^/]*$/, "");
+      segments.set(key, (segments.get(key) || 0) + 1);
+    } else if (/^(video|audio)\//.test(mime) || r.type === "media" || MEDIA_RX.test(r.url)) {
+      if (!page.some((x) => x.url === r.url) && !streams.some((x) => x.url === r.url)) streams.push({ kind: "file", url: r.url, mime, status: r.status, size: r.size });
+    }
+  }
+  const items = [...page, ...streams];
+  for (const [prefix, count] of segments) items.push({ kind: "segments", url: prefix, count });
+  items.forEach((x, i) => (x.id = "m" + (i + 1)));
+  state.media.set(tabId, items);
+  return items;
+}
+
+async function mediaInfo(tabId, { id, url }) {
+  const item = id ? (state.media.get(tabId) || []).find((x) => x.id === id) : { kind: "url", url };
+  if (!item) throw new Error(`No media ${id} on this tab. Call list_media first.`);
+  const tab = await api.tabs.get(tabId);
+  let cookie = "";
+  if (/^https?:/.test(item.url || "")) {
+    try { cookie = (await api.cookies.getAll({ url: item.url })).map((c) => `${c.name}=${c.value}`).join("; "); } catch {}
+  }
+  return { item, cookie, referer: tab.url, userAgent: navigator.userAgent };
+}
+
+async function videoFrameFor(tabId, ref) {
+  const fr = splitRef(ref);
+  const res = await toContent(tabId, { cmd: "videoFrame", ref: fr.ref }, true, fr.frameId);
+  if (res.dataUrl) return res;
+  const off = await frameOffset(tabId, fr.frameId).catch(() => ({ x: 0, y: 0 }));
+  await toContent(tabId, { cmd: "pill", hidden: true }).catch(() => {});
+  try {
+    const full = await visibleShot(tabId);
+    const crop = await cropShot(full, { ...res.viewport, x: res.viewport.x + off.x, y: res.viewport.y + off.y });
+    return { dataUrl: crop || full, time: res.time, fromScreenshot: true };
+  } finally {
+    toContent(tabId, { cmd: "pill", hidden: false }).catch(() => {});
+  }
+}
+
+// ---------------------------------------------------------------- watchers, notifications, gallery
+
+state.watchers = [];
+const notifyUrls = new Map();
+
+// Fetched by the extension so the user's cookies for the site are sent.
+async function watchFetch({ url }) {
+  const r = await fetch(url, { credentials: "include", redirect: "follow", cache: "no-store" });
+  let text = await r.text();
+  if (text.length > 2_000_000) text = text.slice(0, 2_000_000);
+  return { status: r.status, url: r.url, text, contentType: r.headers.get("content-type") || "" };
+}
+
+// Pages that need JavaScript: open in a background tab, run the check there, close it.
+async function watchTab({ url, code, waitMs = 1500 }) {
+  const [win] = await api.windows.getAll({ windowTypes: ["normal"] });
+  const tab = await api.tabs.create({ url, active: false, windowId: win?.id });
+  state.watchTabs = (state.watchTabs || new Set()).add(tab.id);
+  try {
+    await waitForLoad(tab.id, 45000);
+    await sleep(waitMs);
+    return { value: await runJs(tab.id, `(async function () {\n${code}\n})()`) };
+  } finally {
+    state.watchTabs.delete(tab.id);
+    api.tabs.remove(tab.id).catch(() => {});
+  }
+}
+
+async function notify({ title, message, url }) {
+  if (!api.notifications) return { ok: false };
+  const id = "tether-" + Date.now();
+  if (url) notifyUrls.set(id, url);
+  await api.notifications.create(id, { type: "basic", iconUrl: api.runtime.getURL("icons/icon128.png"), title: String(title || "Tether"), message: String(message || "") });
+  return { ok: true };
+}
+
+api.notifications?.onClicked.addListener((id) => {
+  const url = notifyUrls.get(id);
+  if (url) api.tabs.create({ url });
+  api.notifications.clear(id);
+});
+
+// Before and after screenshots of a saved style on a shared tab.
+async function styleShots(tabId, id) {
+  const s = state.styles.find((x) => x.id === id);
+  const t = await api.tabs.update(tabId, { active: true });
+  await api.windows.update(t.windowId, { focused: true }).catch(() => {});
+  await toContent(tabId, { cmd: "pill", hidden: true }).catch(() => {});
+  const applied = state.applied.get(tabId) || new Map();
+  const css = applied.get(id) || (s ? styleCss(s, t.url) : "");
+  try {
+    if (css) await api.scripting.removeCSS({ target: { tabId }, css }).catch(() => {});
+    await sleep(350);
+    const before = await visibleShot(tabId);
+    if (css) await api.scripting.insertCSS({ target: { tabId }, css });
+    if (css) applied.set(id, css);
+    state.applied.set(tabId, applied);
+    await sleep(350);
+    const after = await visibleShot(tabId);
+    return { before, after };
+  } finally {
+    toContent(tabId, { cmd: "pill", hidden: false }).catch(() => {});
+  }
+}
+
+// Calls from the settings page and popup to the host.
+async function hostRpc(method, params) {
+  if (!ws || state.conn !== "connected") {
+    connect();
+    const end = Date.now() + 5000;
+    while (state.conn !== "connected" && Date.now() < end) await sleep(200);
+    if (state.conn !== "connected") throw new Error("The Tether host isn't running. Start your agent, or run “tether serve”.");
+  }
+  const nonce = Math.random().toString(36).slice(2);
+  const res = await new Promise((r) => {
+    requestWaiters.set(nonce, r);
+    setTimeout(() => r({ error: "The host didn't answer." }), 60000);
+    send({ type: "rpc", nonce, method, params });
+  });
+  requestWaiters.delete(nonce);
+  if (res.error) throw new Error(res.error);
+  return res.result;
+}
+
+// ---------------------------------------------------------------- element picker
+
+async function startPick(tabId) {
+  const tab = await api.tabs.get(tabId);
+  if (!shareable(tab.url)) throw new Error("Browser pages can't be picked from.");
+  await ensureContent(tabId);
+  await toContent(tabId, { cmd: "pick" }, false);
+}
+
+function bytesToDataUrl(buf, type) {
+  const bytes = new Uint8Array(buf);
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return `data:${type};base64,${btoa(bin)}`;
+}
+
+async function visibleShot(tabId) {
+  if (state.cdp.has(tabId)) {
+    try { return "data:image/jpeg;base64," + (await cdp(tabId, "Page.captureScreenshot", { format: "jpeg", quality: 85 })).data; } catch {}
+  }
+  const t = await api.tabs.get(tabId);
+  return api.tabs.captureVisibleTab(t.windowId, { format: "jpeg", quality: 85 });
+}
+
+// The picked element, cut out of a screenshot with a little room around it.
+async function cropShot(dataUrl, v) {
+  const blob = await (await fetch(dataUrl)).blob();
+  const bmp = await createImageBitmap(blob);
+  const scale = bmp.width / v.vw;
+  const pad = 16;
+  const sx = Math.max(0, (v.x - pad) * scale), sy = Math.max(0, (v.y - pad) * scale);
+  const sw = Math.min(bmp.width - sx, (v.width + pad * 2) * scale), sh = Math.min(bmp.height - sy, (v.height + pad * 2) * scale);
+  if (sw < 4 || sh < 4) return null;
+  const c = new OffscreenCanvas(Math.round(sw), Math.round(sh));
+  c.getContext("2d").drawImage(bmp, sx, sy, sw, sh, 0, 0, c.width, c.height);
+  const out = await c.convertToBlob({ type: "image/jpeg", quality: 0.9 });
+  return bytesToDataUrl(await out.arrayBuffer(), "image/jpeg");
+}
+
+async function pickSend(tabId, text, element) {
+  const images = [];
+  try {
+    const full = await visibleShot(tabId);
+    const crop = await cropShot(full, element.viewport);
+    if (crop) images.push({ name: "picked element", dataUrl: crop });
+    images.push({ name: "whole page", dataUrl: full });
+  } catch (e) {
+    console.warn("Tether: screenshot for picked element failed", e);
+  }
+  return sendRequest(tabId, text || "(no note: the user picked this element)", images, element);
 }
 
 // Installing a .user.js / .user.css from the settings page. The host parses
@@ -696,19 +1044,76 @@ async function flushRequests(waitMs = 0) {
 
 // ---------------------------------------------------------------- content bridge
 
-async function ensureContent(tabId) {
+async function ensureContent(tabId, frameId = 0) {
   try {
-    const r = await api.tabs.sendMessage(tabId, { cmd: "ping" }, { frameId: 0 });
+    const r = await api.tabs.sendMessage(tabId, { cmd: "ping" }, { frameId });
     if (r?.ok) return;
   } catch {}
-  await api.scripting.executeScript({ target: { tabId, frameIds: [0] }, files: ["content.js"] });
+  await api.scripting.executeScript({ target: { tabId, frameIds: [frameId] }, files: ["content.js"] });
 }
 
-async function toContent(tabId, msg, inject = true) {
-  if (inject) await ensureContent(tabId);
-  const res = await api.tabs.sendMessage(tabId, { ...msg, agents: state.agents }, { frameId: 0 });
+async function toContent(tabId, msg, inject = true, frameId = 0) {
+  if (inject) await ensureContent(tabId, frameId);
+  const res = await api.tabs.sendMessage(tabId, { ...msg, agents: state.agents }, { frameId });
   if (res?.error) throw new Error(res.error);
   return res;
+}
+
+// ---------------------------------------------------------------- frames
+// Cross-origin iframes get their own content script. Their outlines are
+// spliced into the page's, with refs like f12.e5 that route to frame 12.
+
+async function prepareFrames(tabId) {
+  let frames = [];
+  try { frames = await api.webNavigation.getAllFrames({ tabId }); } catch {}
+  const children = (frames || []).filter((f) => f.frameId !== 0 && /^https?:/.test(f.url));
+  if (!children.length) return frames || [];
+  await api.scripting.executeScript({ target: { tabId, allFrames: true }, files: ["content.js"] }).catch(() => {});
+  await Promise.all(children.map((f) => api.tabs.sendMessage(tabId, { cmd: "frameHello", frameId: f.frameId }, { frameId: f.frameId }).catch(() => {})));
+  await sleep(120);
+  return frames;
+}
+
+function splitRef(ref) {
+  const m = /^\[?f(\d+)\.(e\d+)\]?$/.exec(String(ref || ""));
+  return m ? { frameId: Number(m[1]), ref: m[2] } : { frameId: 0, ref };
+}
+
+async function stitch(tabId, text, depth = 0) {
+  if (depth > 4 || !text.includes("@@frame:")) return text;
+  const out = [];
+  for (const line of text.split("\n")) {
+    const m = /^(\s*)@@frame:(\d+)@@$/.exec(line);
+    if (!m) { out.push(line); continue; }
+    const [, pad, id] = m;
+    try {
+      const res = await toContent(tabId, { cmd: "snapshot", maxLines: 300 }, true, Number(id));
+      let body = res.text.split("\n\n").slice(1).join("\n\n");
+      body = body.replace(/\[(e\d+)\]/g, `[f${id}.$1]`);
+      body = await stitch(tabId, body, depth + 1);
+      out.push(...body.split("\n").filter(Boolean).map((l) => pad + l));
+    } catch {
+      out.push(`${pad}(this frame could not be read)`);
+    }
+  }
+  return out.join("\n");
+}
+
+// Offset of a frame's viewport inside the top-level viewport, for real clicks.
+async function frameOffset(tabId, frameId) {
+  if (!frameId) return { x: 0, y: 0 };
+  const frames = await api.webNavigation.getAllFrames({ tabId });
+  let x = 0, y = 0, cur = frameId;
+  while (cur) {
+    const f = frames.find((fr) => fr.frameId === cur);
+    if (!f) throw new Error("frame gone");
+    const r = await api.tabs.sendMessage(tabId, { cmd: "frameRect", childFrameId: cur }, { frameId: f.parentFrameId });
+    if (!r?.rect) throw new Error("frame position unknown");
+    x += r.rect.x;
+    y += r.rect.y;
+    cur = f.parentFrameId;
+  }
+  return { x, y };
 }
 
 function updatePills() {
@@ -997,6 +1402,10 @@ async function handleCall(method, p) {
   await ready;
   const tabId = p.tabId;
   if (tabId != null && method !== "openTab") await requireShared(tabId);
+  if (tabId != null && state.paused.has(tabId) && !READ_ONLY.has(method)) {
+    const ps = state.paused.get(tabId);
+    throw new Error(ps.by === "agent" ? "Waiting for the user to press Done on this tab. Call wait_for_user to wait for them." : "The user paused this tab. Call wait_for_user to wait until they resume, or ask them in chat.");
+  }
 
   switch (method) {
     case "openTab": {
@@ -1020,6 +1429,28 @@ async function handleCall(method, p) {
     case "previewCss":
       await previewCss(tabId, p.css);
       return {};
+    case "waitUser":
+      return waitUser(tabId, p);
+    case "watchFetch":
+      return watchFetch(p);
+    case "watchTab":
+      return watchTab(p);
+    case "notify":
+      return notify(p);
+    case "styleShots":
+      return styleShots(tabId, p.id);
+    case "listMedia":
+      return { items: await listMediaFor(tabId) };
+    case "mediaInfo":
+      return mediaInfo(tabId, p);
+    case "videoFrame":
+      return videoFrameFor(tabId, p.ref);
+    case "downloads":
+      return { list: [...downloads.values()].slice(-(p.limit || 30)) };
+    case "waitDownload":
+      return { item: await waitDownload(p) };
+    case "download":
+      return { item: await downloadUrl(p) };
     case "requestBypass":
       return requestBypass(p.agent, p.reason);
     case "startSession":
@@ -1052,15 +1483,19 @@ async function handleCall(method, p) {
     case "click":
     case "hover":
       if (state.cdp.has(tabId)) {
-        const pt = await toContent(tabId, { cmd: "locate", ref: p.ref, verb: method === "click" ? "Clicked" : "Hovered" });
-        await cdpMouse(tabId, pt.x, pt.y, method === "click" ? (p.double ? 2 : 1) : 0);
+        const fr = splitRef(p.ref);
+        const pt = await toContent(tabId, { cmd: "locate", ref: fr.ref, verb: method === "click" ? "Clicked" : "Hovered" }, true, fr.frameId);
+        let off = { x: 0, y: 0 };
+        try { off = await frameOffset(tabId, fr.frameId); } catch { break; } // fall back to DOM events
+        await cdpMouse(tabId, pt.x + off.x, pt.y + off.y, method === "click" ? (p.double ? 2 : 1) : 0);
         await settle(tabId);
         return { note: pt.note };
       }
       break;
     case "type":
       if (state.cdp.has(tabId)) {
-        const r = await toContent(tabId, { cmd: "focusFor", ref: p.ref, append: p.append });
+        const fr = splitRef(p.ref);
+        const r = await toContent(tabId, { cmd: "focusFor", ref: fr.ref, append: p.append }, true, fr.frameId);
         if (!p.append && r.clear) await cdpKey(tabId, "Delete");
         await cdp(tabId, "Input.insertText", { text: p.text });
         if (p.submit) await cdpKey(tabId, "Enter");
@@ -1070,7 +1505,7 @@ async function handleCall(method, p) {
       break;
     case "press":
       if (state.cdp.has(tabId)) {
-        if (p.ref) await toContent(tabId, { cmd: "focusFor", ref: p.ref, append: true });
+        if (p.ref) { const fr = splitRef(p.ref); await toContent(tabId, { cmd: "focusFor", ref: fr.ref, append: true }, true, fr.frameId); }
         await cdpKey(tabId, p.key);
         await settle(tabId);
         return { note: `Pressed ${p.key}` };
@@ -1080,8 +1515,27 @@ async function handleCall(method, p) {
 
   // Everything else (and the fallbacks above) runs in the content script.
   if (tabId == null) throw new Error(`Unknown method ${method}`);
-  const res = await toContent(tabId, { cmd: method, ...p });
-  if (!["snapshot", "readText", "waitFor"].includes(method)) await settle(tabId);
+  if (method === "snapshot") {
+    await prepareFrames(tabId);
+    const res = await toContent(tabId, { cmd: "snapshot", ...p });
+    return { text: await stitch(tabId, res.text) };
+  }
+  if (method === "fill") {
+    // Fields can live in different frames.
+    const groups = new Map();
+    for (const f of p.fields) {
+      const fr = splitRef(f.ref);
+      if (!groups.has(fr.frameId)) groups.set(fr.frameId, []);
+      groups.get(fr.frameId).push({ ...f, ref: fr.ref });
+    }
+    const notes = [];
+    for (const [frameId, fields] of groups) notes.push((await toContent(tabId, { cmd: "fill", fields }, true, frameId)).note);
+    await settle(tabId);
+    return { note: notes.join("; ") };
+  }
+  const fr = splitRef(p.ref);
+  const res = await toContent(tabId, { cmd: method, ...p, ref: fr.ref }, true, fr.frameId);
+  if (!["readText", "waitFor", "mediaRead"].includes(method)) await settle(tabId);
   return res;
 }
 
@@ -1436,6 +1890,8 @@ async function popupState(tabId) {
     styles: tab ? state.styles.filter((x) => styleCss(x, tab.url || "").trim()).map(({ id, name, description }) => ({ id, name, description, on: !state.disabledStyles.has(id) })) : [],
     requests: tab ? state.requests.filter((r) => hostOf(r.url) === hostOf(tab.url)).slice(0, 3) : [],
     pendingRequests: state.pendingRequests.length,
+    watchers: tab ? state.watchers.filter((w) => hostOf(w.url) === hostOf(tab.url)) : [],
+    allWatchers: state.watchers,
     port: s.port,
     trusted: s.trusted,
     conn: state.conn,
@@ -1443,7 +1899,7 @@ async function popupState(tabId) {
     agents: state.agents,
     browserHasDebugger: HAS_CDP,
     userScripts: state.userScripts,
-    tab: tab && { id: tab.id, title: tab.title, url: tab.url, favIconUrl: tab.favIconUrl, shareable: shareable(tab.url), shared: state.shared.has(tab.id), by: state.shared.get(tab.id)?.by, cdp: state.cdp.has(tab.id), activity: state.activity.get(tab.id) },
+    tab: tab && { id: tab.id, title: tab.title, url: tab.url, favIconUrl: tab.favIconUrl, shareable: shareable(tab.url), shared: state.shared.has(tab.id), paused: state.paused.get(tab.id) || null, by: state.shared.get(tab.id)?.by, cdp: state.cdp.has(tab.id), activity: state.activity.get(tab.id) },
     others: (await tabList()).filter((t) => t.id !== tabId).map((t) => ({ ...t, activity: state.activity.get(t.id) })),
     scripts: tab ? scriptsFor(tab.url).map(({ id, name, description, run }) => ({ id, name, description, run, on: !state.disabledScripts.has(id) })) : [],
     allScripts: state.scripts.map(({ id, name, description, run, matches, includes, version, body }) => ({ id, name, description, run, matches: matches.length ? matches : includes, version, imported: body === undefined, on: !state.disabledScripts.has(id) })),
@@ -1507,12 +1963,28 @@ api.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
       case "sendRequest":
         return sendRequest(msg.tabId, msg.text, msg.images || []);
+      case "hostRpc":
+        return { result: await hostRpc(msg.method, msg.params || {}) };
+      case "startPick":
+        await startPick(msg.tabId);
+        return { ok: true };
+      case "pickSend":
+        if (sender.tab) pickSend(sender.tab.id, msg.text, msg.element).then(() => broadcast(), (e) => console.warn(e));
+        return { ok: true };
       case "rec":
         if (sender.tab) queueRec(sender.tab.id, msg.events || []);
         return { ok: true };
       case "setBypass":
         await setBypass(msg.on);
         return { ok: true };
+      case "pause":
+      case "resume": {
+        const id = msg.tabId ?? sender.tab?.id;
+        if (id == null || !state.shared.has(id)) return { ok: false };
+        if (msg.type === "pause") pauseTab(id, { by: "user" });
+        else resumeTab(id, true);
+        return { ok: true };
+      }
       case "bypassAnswer": {
         const w = bypassWaiters.get(msg.id);
         if (w) w(!!msg.allow);
@@ -1572,7 +2044,7 @@ api.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (sender.tab && state.shared.has(sender.tab.id) && !state.cdp.has(sender.tab.id)) pushConsole(sender.tab.id, msg.entry);
         return { ok: true };
       case "pillState":
-        return { shared: state.shared.has(sender.tab?.id), agents: state.agents, conn: state.conn, activity: state.activity.get(sender.tab?.id), recording: state.recording.has(sender.tab?.id) ? { values: state.recordValues } : null };
+        return { shared: state.shared.has(sender.tab?.id), paused: state.paused.get(sender.tab?.id) || null, agents: state.agents, conn: state.conn, activity: state.activity.get(sender.tab?.id), recording: state.recording.has(sender.tab?.id) ? { values: state.recordValues } : null };
     }
   })().then(
     (r) => sendResponse(r),

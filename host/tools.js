@@ -5,6 +5,9 @@ import { NO_TABS, NO_BROWSER } from "./hub.js";
 import { list, get, save, remove, importText } from "./scripts.js";
 import { listSites, sessionsOf, readSession, siteMap, readNotes, writeNotes, resolveHost } from "./sites.js";
 import { listRequests, imagesOf, resolveRequest } from "./requests.js";
+import { saveMedia, formatMedia } from "./media.js";
+import { listWatchers, getWatcher, saveWatcher, runWatcher, deleteWatcher } from "./watchers.js";
+import { saveShots } from "./gallery.js";
 
 const tab = z.string().optional().describe('Tab handle from list_tabs, e.g. "chrome:812". Optional when only one tab is shared.');
 const ref = z.string().describe('Element ref from the latest snapshot, e.g. "e14".');
@@ -184,6 +187,146 @@ export function registerTools(server, hub, agentName) {
     }
   );
 
+  // ---- watchers ----
+
+  const ago = (t) => { const s = Math.round((Date.now() - t) / 1000); return s < 90 ? `${s}s ago` : s < 5400 ? `${Math.round(s / 60)} min ago` : `${Math.round(s / 3600)} h ago`; };
+
+  tool(
+    "save_watcher",
+    `Watch a page and notify the user when something they care about happens ("tell me when the price drops below 2000", "when results are posted"). The browser fetches the page on a schedule with the user's cookies. mode=fetch (default) loads the URL without rendering it, so point it at the JSON API you found with network_requests when there is one; check is a function body that receives response = { status, url, text, json, contentType } and has no DOM. mode=tab opens the page in a background tab for a moment, for pages built by JavaScript; check runs in the page with full DOM access. check either returns a value (the user is notified when it changes from the last run) or { notify: true/false, message, value }. Notifications go to a browser notification and, with notify including "ntfy", to the user's ntfy topic. Test with run_watcher.`,
+    {
+      name: z.string(),
+      url: z.string(),
+      check: z.string().describe("JavaScript function body. Return a value, or { notify, message, value }."),
+      mode: z.enum(["fetch", "tab"]).optional(),
+      every_minutes: z.number().int().optional().describe("Default 30, minimum 1."),
+      notify: z.array(z.enum(["browser", "ntfy"])).optional().describe('Default ["browser"].'),
+      description: z.string().optional(),
+    },
+    async (a) => {
+      const w = saveWatcher(a);
+      hub.pushWatchers();
+      return text(`Saved watcher "${w.name}": every ${w.every} min, ${w.mode} mode, notifying by ${w.notify.join(" and ")}. Run it once with run_watcher to check the result.`);
+    }
+  );
+
+  tool("list_watchers", "List watchers with their last result.", {}, async () => {
+    const all = listWatchers();
+    if (!all.length) return text("No watchers yet.");
+    return text(all.map((w) => `${w.id}  ${w.name}  every ${w.every} min  ${w.mode}${w.enabled ? "" : "  (off)"}\n    ${w.url}\n    ${w.last ? (w.last.ok ? `last: ${w.last.message ?? ""} (${ago(w.last.at)})` : `last run failed: ${w.last.error} (${ago(w.last.at)})`) : "not run yet"}`).join("\n"));
+  }, { readOnlyHint: true });
+
+  tool(
+    "run_watcher",
+    "Run a watcher now and return what its check produced. Set notify to true to send the notification if it fires; by default this is a dry run that still records the value as the new baseline.",
+    { name: z.string(), notify: z.boolean().optional() },
+    async (a) => {
+      const w = getWatcher(a.name);
+      if (!w) throw new Error(`No watcher called ${a.name}`);
+      const r = await runWatcher(hub, w, { notify: !!a.notify });
+      hub.pushWatchers();
+      return text(`value: ${JSON.stringify(r.value)}\nmessage: ${r.message ?? ""}\nwould notify: ${r.notified || (a.notify ? "no" : "dry run")}`);
+    }
+  );
+
+  tool("delete_watcher", "Delete a watcher.", { name: z.string() }, async (a) => {
+    if (!deleteWatcher(a.name)) throw new Error(`No watcher called ${a.name}`);
+    hub.pushWatchers();
+    return text(`Deleted ${a.name}.`);
+  }, { destructiveHint: true });
+
+  // ---- media ----
+
+  tool(
+    "list_media",
+    "List the media on a shared tab: images, video and audio (with size, length, playing state), canvases and CSS background images, plus HLS/DASH streams and media files the page loaded (from the network log). Each has an id like m3 for save_media. Streams only appear after the page has requested them, so start playback first.",
+    { tab },
+    async (a) => {
+      const res = await hub.callTab(a.tab, "listMedia", {});
+      return text(res.items.length ? formatMedia(res.items) : "No media found on this page.");
+    },
+    { readOnlyHint: true }
+  );
+
+  tool(
+    "save_media",
+    "Save an item from list_media (or any URL) to disk under ~/.tether/media/<site>/, using the browser's cookies. Handles normal files, blob: and data: URLs, canvases, and HLS/DASH streams (through ffmpeg). Returns the file path.",
+    { tab, id: z.string().optional().describe("Id from list_media, e.g. m3."), url: z.string().optional(), filename: z.string().optional(), timeout_seconds: z.number().int().optional().describe("Default 900, for long streams.") },
+    async (a) => {
+      if (!a.id && !a.url) throw new Error("Pass id (from list_media) or url.");
+      const { handle } = hub.resolveTab(a.tab);
+      hub.activity(agentName(), "save_media", handle, "is saving media");
+      const r = await saveMedia(hub, handle, { id: a.id, url: a.url, filename: a.filename, timeoutSeconds: a.timeout_seconds });
+      return text(`${r.path}${r.bytes != null ? `\n${Math.round(r.bytes / 1024)} KB` : ""}${r.type ? `, ${r.type}` : ""}${r.note ? `\n${r.note}` : ""}`);
+    }
+  );
+
+  tool(
+    "video_frame",
+    "Get the current frame of a video on a shared tab as an image. Falls back to a cropped screenshot when the site doesn't allow reading the video.",
+    { tab, ref: ref.describe("The video's ref from list_media or snapshot.") },
+    async (a) => {
+      const { handle } = hub.resolveTab(a.tab);
+      const r = await hub.callTab(handle, "videoFrame", { ref: a.ref }, 45000);
+      const m = /^data:([^;]+);base64,(.*)$/.exec(r.dataUrl || "");
+      if (!m) throw new Error("Couldn't capture the frame.");
+      return { content: [{ type: "text", text: `Frame at ${r.time?.toFixed?.(1) ?? "?"}s${r.fromScreenshot ? " (cropped from a screenshot; the site blocks reading the video)" : ""}` }, { type: "image", data: m[2], mimeType: m[1] }] };
+    },
+    { readOnlyHint: true }
+  );
+
+  // ---- downloads ----
+
+  const dl = (d) => (d ? `${d.filename || "(no file yet)"}\n  ${d.state || "in_progress"}${d.error ? ` (${d.error})` : ""}${d.bytes != null ? `, ${Math.round(d.bytes / 1024)} KB` : ""}${d.mime ? `, ${d.mime}` : ""}${d.note ? `, ${d.note}` : ""}\n  from ${d.url}` : "");
+  const browserFor = (a) => (a.tab ? hub.resolveTab(a.tab).browser : hub.pickBrowser(a.browser));
+
+  tool(
+    "wait_for_download",
+    "After clicking something that downloads a file (an invoice, a CSV export, a PDF), wait for it to finish and get its path on disk. Downloads that started in the last 15 seconds count, so call it right after the click.",
+    { tab, timeout_seconds: z.number().int().optional().describe("Default 60."), browser: z.string().optional() },
+    async (a) => {
+      const secs = a.timeout_seconds ?? 60;
+      const res = await hub.call(browserFor(a), "waitDownload", { timeout: secs * 1000 }, secs * 1000 + 10000);
+      return text(res.item ? dl(res.item) : `No download started within ${secs}s.`);
+    }
+  );
+
+  tool(
+    "download_file",
+    "Download a URL through the user's browser, with their cookies, and get the saved file's path. Limited to sites of shared tabs unless bypass mode is on.",
+    { url: z.string(), filename: z.string().optional().describe("File name inside the browser's download folder."), tab, browser: z.string().optional() },
+    async (a) => {
+      const res = await hub.call(browserFor(a), "download", { url: a.url, filename: a.filename }, 135000);
+      return text(res.item ? dl(res.item) : "The download didn't finish within two minutes.");
+    }
+  );
+
+  tool(
+    "list_downloads",
+    "List files downloaded while tabs were shared with you (not the user's whole download history).",
+    { tab, browser: z.string().optional() },
+    async (a) => {
+      const res = await hub.call(browserFor(a), "downloads", {});
+      return text(res.list.length ? res.list.map(dl).join("\n") : "No downloads yet in this session.");
+    },
+    { readOnlyHint: true }
+  );
+
+  tool(
+    "wait_for_user",
+    "Hand a shared tab to the user and wait for them. With message, the page shows it with a Done button and brings the tab to the front: use it for CAPTCHAs, 2FA codes, logins, payment confirmation or any choice that is theirs. Without message, it waits for the user to resume a tab they paused (actions on a paused tab fail with a note saying so). Returns when they press Done or Resume, or after the timeout.",
+    { tab, message: z.string().optional().describe("What the user should do, in one or two sentences."), timeout_seconds: z.number().int().optional().describe("Default 300, at most 900.") },
+    async (a) => {
+      const secs = Math.min(Math.max(a.timeout_seconds ?? 300, 5), 900);
+      const { handle } = hub.resolveTab(a.tab);
+      if (a.message) hub.activity(agentName(), "wait_for_user", handle, "is waiting for you");
+      const res = await hub.callTab(handle, "waitUser", { agent: agentName(), message: a.message, timeout: secs * 1000 }, secs * 1000 + 10000);
+      if (!res.resumed) return text(res.note);
+      const snap = await hub.callTab(handle, "snapshot", { maxLines: 250 }).catch(() => null);
+      return text(`${res.note}${snap?.text ? "\n\n" + snap.text : ""}`);
+    }
+  );
+
   tool(
     "start_session",
     "Start working in the user's own browser (their logins and cookies) when no tab is shared yet. mode=window (default) opens a separate window for you, so the user's tabs are left alone; every tab you open in it is yours. mode=current asks to use the tab the user is looking at, for tasks about the page they're on. The user approves in a prompt (up to two minutes). Returns the tab handle and a snapshot.",
@@ -357,7 +500,11 @@ export function registerTools(server, hub, agentName) {
       const content = [];
       for (const r of reqs.slice(0, 5)) {
         const head = `Request ${r.id} (${r.status}) from ${r.tab || "a tab"}\n${r.title ? r.title + "\n" : ""}${r.url}`;
-        const tail = (r.images.length ? `\n\n${r.images.length} image(s) attached:` : "") + (r.reply ? `\n\nYour reply: ${r.reply}` : "");
+        const e = r.element;
+        const picked = e
+          ? `\n\nThe user picked this element on the page:\n  ${e.role} "${e.name || ""}"\n  selector: ${e.selector}${e.context ? `\n  inside: "${e.context}"` : ""}\n  size: ${Math.round(e.viewport?.width || 0)}x${Math.round(e.viewport?.height || 0)} px${e.text ? `\n  text: ${JSON.stringify(e.text.slice(0, 300))}` : ""}${e.outline ? `\n  outline:\n${e.outline.split("\n").slice(0, 40).map((l) => "    " + l).join("\n")}` : ""}${e.html ? `\n  html: ${e.html.slice(0, 1500)}` : ""}`
+          : "";
+        const tail = picked + (r.images.length ? `\n\n${r.images.length} image(s) attached${e ? " (the element, then the whole page)" : ""}:` : "") + (r.reply ? `\n\nYour reply: ${r.reply}` : "");
         content.push({ type: "text", text: `${head}\n\n${r.text || "(no text)"}${tail}` });
         for (const img of imagesOf(r)) content.push({ type: "image", data: img.data, mimeType: img.mimeType });
       }
@@ -400,11 +547,22 @@ export function registerTools(server, hub, agentName) {
   tool(
     "save_style",
     "Save CSS that restyles a site on every visit, in every connected browser. It is stored as a UserCSS file (~/.tether/styles/<id>.user.css) that also installs unchanged in Stylus. It shows in the popup on matching pages, where the user can switch it off. Saving an existing name replaces it and bumps its version. Use !important where the site's own rules win. For changes CSS can't do, pair it with save_script (run=auto).",
-    { name: z.string(), description: z.string().optional(), matches: z.array(z.string()).describe('Match patterns, e.g. ["https://mail.google.com/*"].'), css: z.string() },
+    { name: z.string(), description: z.string().optional(), matches: z.array(z.string()).describe('Match patterns, e.g. ["https://mail.google.com/*"].'), css: z.string(), tab: tab.describe("A shared tab the style applies to. Before and after screenshots of it go into the user's gallery.") },
     async (a) => {
       const s = save("style", a);
       hub.pushScripts();
-      return text(`Saved style "${s.name}" v${s.version} as ~/.tether/styles/${s.id}.user.css. It applies now on open matching tabs and on every visit. The file installs as-is in Stylus.`);
+      let shots = "";
+      if (a.tab) {
+        try {
+          await new Promise((r) => setTimeout(r, 600)); // let the browser receive and apply it
+          const r = await hub.callTab(a.tab, "styleShots", { id: s.id }, 45000);
+          saveShots("style", s.id, r);
+          shots = " Before and after screenshots are in the gallery on Tether's settings page.";
+        } catch (e) {
+          shots = ` (Couldn't take gallery screenshots: ${e.message})`;
+        }
+      }
+      return text(`Saved style "${s.name}" v${s.version} as ~/.tether/styles/${s.id}.user.css. It applies now on open matching tabs and on every visit. The file installs as-is in Stylus.${shots}`);
     }
   );
 

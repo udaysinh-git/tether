@@ -13,6 +13,7 @@ const HELP = `tether: hand browser tabs to your coding agent
   tether key           Print the pairing key for the extension
   tether key --new     Make a new key (paste it into the extension again)
   tether status        Show connected browsers, agents and shared tabs
+  tether doctor        Check every piece of the setup and say what to fix
   tether setup         Print the lines that add Tether to Claude Code and Codex
   tether install-native [--chrome-id <id>...]
                        Let Firefox-based browsers (Firefox, Zen, LibreWolf) start
@@ -72,6 +73,11 @@ switch (cmd) {
     console.log(`Pairing key for Chrome, Brave and Edge: ${loadConfig().key}\n`);
     const { installNative } = await import("./install-native.js");
     installNative();
+    break;
+  }
+  case "doctor": {
+    const { doctor } = await import("./doctor.js");
+    await doctor();
     break;
   }
   case "install-native": {

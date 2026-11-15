@@ -18,7 +18,7 @@ export function saveRequest(req) {
     fs.writeFileSync(path.join(d, file), Buffer.from(m[2], "base64"));
     images.push({ file, mimeType: m[1], name: img.name || file });
   });
-  const meta = { id, text: String(req.text || "").slice(0, 8000), url: req.url, title: req.title, tab: req.tab, browser: req.browser, images, status: "open", created: Date.now() };
+  const meta = { id, text: String(req.text || "").slice(0, 8000), url: req.url, title: req.title, tab: req.tab, browser: req.browser, images, element: req.element || undefined, status: "open", created: Date.now() };
   fs.writeFileSync(path.join(d, "request.json"), JSON.stringify(meta, null, 2));
   return meta;
 }
