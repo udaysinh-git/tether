@@ -7,11 +7,11 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { loadConfig, safeEqual, setSetting } from "./config.js";
 import { Hub } from "./hub.js";
 import { registerTools } from "./tools.js";
-import { watchAll } from "./scripts.js";
+import { watchAll, remove as removeItem } from "./scripts.js";
 import { startWatchers, setWatcherEnabled, runWatcher, getWatcher, deleteWatcher } from "./watchers.js";
-import { galleryIndex, shotOf, publishGist } from "./gallery.js";
+import { galleryIndex, shotOf, publishGist, forget } from "./gallery.js";
 
-const VERSION = "0.2.1";
+const VERSION = "0.2.2";
 const IDLE_EXIT_MS = 30 * 60 * 1000;
 
 const AGENT_NAMES = { "claude-code": "Claude Code", "codex-mcp-client": "Codex", codex: "Codex", cursor: "Cursor", "gemini-cli": "Gemini CLI" };
@@ -35,6 +35,12 @@ export async function serve({ quiet = false } = {}) {
     galleryIndex: () => galleryIndex(),
     galleryImage: ({ kind, id, which }) => ({ dataUrl: shotOf(kind, id, which) }),
     publishGist: ({ kind, id }) => publishGist(kind, id),
+    deleteItem: ({ kind, id }) => {
+      if (!removeItem(kind, id)) throw new Error(`No ${kind} ${id}`);
+      forget(kind, id);
+      hub.pushScripts();
+      return { ok: true };
+    },
     getSettings: () => { const c = loadConfig(); return { ntfyTopic: c.ntfyTopic || "", ntfyServer: c.ntfyServer || "", gistAccount: c.gistAccount || "" }; },
     setSettings: (p) => { for (const k of ["ntfyTopic", "ntfyServer", "gistAccount"]) if (k in p) setSetting(k, String(p[k] || "").trim()); return { ok: true }; },
   };

@@ -3,7 +3,22 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const isFirefox = typeof globalThis.browser !== "undefined" && !!api.runtime.getBrowserInfo;
 const send = (msg) => api.runtime.sendMessage(msg).then((r) => { if (r?.error) throw new Error(r.error); return r; });
-const where = (m) => (m.length ? m.map((x) => (x === "<all_urls>" || x === "*://*/*" ? "every site" : x)).join(", ") : "every site");
+// Match patterns and UserCSS rules, in words.
+function where(m) {
+  if (!m.length) return "every site";
+  return [...new Set(m.map((x) => {
+    if (x === "<all_urls>" || x === "*://*/*") return "every site";
+    let r;
+    if ((r = /^url-prefix\((.*)\)$/.exec(x))) return r[1].replace(/^https?:\/\//, "").replace(/\/$/, "") + (r[1].endsWith("/") ? "" : "…");
+    if ((r = /^domain\((.*)\)$/.exec(x))) return `${r[1]} and its subdomains`;
+    if ((r = /^url\((.*)\)$/.exec(x))) return r[1];
+    if (/^regexp\(/.test(x)) {
+      const host = x.replace(/\\/g, "").match(/([a-z0-9-]+\.)+[a-z]{2,}/i)?.[0];
+      return host || "pages matching a pattern";
+    }
+    return x.replace(/^\*:\/\//, "").replace(/^https?:\/\//, "").replace(/\/\*$/, "");
+  }))].join(", ");
+}
 
 const rpc = (method, params = {}) => send({ type: "hostRpc", method, params }).then((r) => r.result);
 let gallery = {};
@@ -29,6 +44,7 @@ function itemRow(kind, s) {
     <button class="quiet" data-export="${esc(s.id)}" data-kind="${kind}" title="Download the ${kind === "style" ? ".user.css for Stylus" : ".user.js for Tampermonkey"}">Download</button>
     ${gallery[`${kind}:${s.id}`]?.gist ? `<a href="${esc(gallery[`${kind}:${s.id}`].gist.raw)}" target="_blank" rel="noopener" title="Install link for Tampermonkey or Stylus">Gist</a>` : ""}
     <button class="quiet" data-publish="${esc(s.id)}" data-kind="${kind}" title="Publish as a secret GitHub Gist">${gallery[`${kind}:${s.id}`]?.gist ? "Update Gist" : "Publish"}</button>
+    <button class="quiet" data-del="${esc(s.id)}" data-kind="${kind}" data-name="${esc(s.name)}" title="Delete this ${kind}">Delete</button>
     ${kind === "style" || s.run === "auto" ? `<button class="switch" role="switch" aria-checked="${s.on}" aria-label="${esc(s.name)}" data-toggle="${esc(s.id)}" data-kind="${kind}"></button>` : ""}
   </div>`;
 }
@@ -172,6 +188,16 @@ document.addEventListener("click", async (e) => {
   if (t.dataset.watchDel) {
     if (!confirm("Delete this watcher?")) return;
     await rpc("deleteWatcher", { id: t.dataset.watchDel });
+    return load();
+  }
+  if (t.dataset.del) {
+    if (!confirm(`Delete “${t.dataset.name}”? This removes the file from ~/.tether${t.dataset.kind === "style" ? "/styles" : "/scripts"} and it stops applying in every browser.`)) return;
+    try {
+      await rpc("deleteItem", { kind: t.dataset.kind, id: t.dataset.del });
+    } catch (err) {
+      alert(err.message);
+    }
+    await new Promise((r) => setTimeout(r, 400));
     return load();
   }
   if (t.dataset.publish) {

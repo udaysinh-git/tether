@@ -40,6 +40,13 @@ export function shotOf(kind, id, which) {
   return fs.existsSync(f) ? "data:image/jpeg;base64," + fs.readFileSync(f).toString("base64") : null;
 }
 
+export function forget(kind, id) {
+  for (const which of ["before", "after"]) fs.rmSync(file(kind, id, which), { force: true });
+  const idx = readIndex();
+  delete idx[`${kind}:${id}`];
+  writeIndex(idx);
+}
+
 export function galleryIndex() {
   return readIndex();
 }
