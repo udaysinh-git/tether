@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Tether settings</title>
+    <link rel="stylesheet" href="../ui.css" />
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <main>
+      <h1>Tether settings</h1>
+
+      <section>
+        <h2>Connection</h2>
+        <form id="conn" class="grid">
+          <label>Pairing key
+            <input id="key" type="password" autocomplete="off" spellcheck="false" />
+            <span class="faint">Run <span class="cmd">tether key</span> to see it.</span>
+          </label>
+          <label>Port
+            <input id="port" type="number" min="1024" max="65535" />
+            <span class="faint">Only change this if you changed it in ~/.tether/config.json.</span>
+          </label>
+          <div><button class="primary" type="submit">Save</button> <span id="saved" class="faint"></span></div>
+        </form>
+      </section>
+
+      <section id="trustedSection" hidden>
+        <h2>Real input</h2>
+        <div class="line">
+          <div class="grow">
+            <p>Use the debugger for clicks, typing and network capture</p>
+            <p class="faint">Sites see clicks and keys exactly as if you made them, page scripts run past strict security policies, and the network log includes response bodies. The browser shows a “started debugging this browser” bar while a tab is shared.</p>
+          </div>
+          <button id="trusted" class="switch" role="switch" aria-checked="true" aria-label="Real input"></button>
+        </div>
+      </section>
+
+      <section>
+        <h2>Scripts</h2>
+        <p id="usStatus" class="muted"></p>
+        <div id="scripts"></div>
+        <p class="faint">Agents save scripts with the save_script tool. They live as plain files in <span class="cmd">~/.tether/scripts</span>, so you can edit or delete them there too.</p>
+      </section>
+    </main>
+    <script src="options.js" type="module"></script>
+  </body>
+</html>

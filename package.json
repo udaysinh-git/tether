@@ -1,0 +1,30 @@
+{
+  "name": "tether-mcp",
+  "version": "0.1.0",
+  "description": "Hand chosen browser tabs to Claude Code, Codex or any MCP client.",
+  "main": "host/cli.js",
+  "scripts": {
+    "build": "node scripts/build-ext.js",
+    "test": "node scripts/build-ext.js && node test/e2e.mjs && node test/e2e.mjs --fallback",
+    "serve": "node host/cli.js serve",
+    "icons": "node scripts/make-icons.js",
+    "shots": "node scripts/build-ext.js && node test/shots.mjs"
+  },
+  "license": "UNLICENSED",
+  "type": "module",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "ws": "^8.23.0",
+    "zod": "^4.6.7"
+  },
+  "bin": {
+    "tether": "host/cli.js"
+  },
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "playwright": "^1.65.1"
+  }
+}

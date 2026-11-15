@@ -1,0 +1,181 @@
+// The hub keeps one WebSocket per connected browser extension and routes
+// tool calls to the right browser by tab handle ("chrome:812").
+import { WebSocketServer } from "ws";
+import { safeEqual } from "./config.js";
+import { listScripts } from "./scripts.js";
+
+const EXT_ORIGIN = /^(chrome-extension|moz-extension|safari-web-extension):\/\//;
+
+export class Hub {
+  constructor(cfg, log) {
+    this.cfg = cfg;
+    this.log = log;
+    this.browsers = new Map(); // key -> { key, name, ws, tabs, pending }
+    this.agents = new Map(); // sessionId -> { name, since }
+    this.seq = 0;
+    this.wss = new WebSocketServer({ noServer: true, maxPayload: 32 * 1024 * 1024 });
+  }
+
+  handleUpgrade(req, socket, head) {
+    const origin = req.headers.origin || "";
+    if (!EXT_ORIGIN.test(origin)) {
+      socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+    this.wss.handleUpgrade(req, socket, head, (ws) => this.accept(ws, origin));
+  }
+
+  accept(ws, origin) {
+    let browser = null;
+    const authTimer = setTimeout(() => ws.close(4001, "no hello"), 5000);
+
+    ws.on("message", (raw) => {
+      let msg;
+      try { msg = JSON.parse(raw); } catch { return; }
+
+      if (!browser) {
+        if (msg.type !== "hello") return;
+        clearTimeout(authTimer);
+        if (!safeEqual(msg.key, this.cfg.key)) {
+          ws.send(JSON.stringify({ type: "denied", reason: "Wrong pairing key" }));
+          ws.close(4003, "bad key");
+          return;
+        }
+        browser = this.register(ws, msg.browser || "browser", origin);
+        browser.tabs = msg.tabs || [];
+        ws.send(JSON.stringify({ type: "welcome", id: browser.key, agents: this.agentNames() }));
+        this.pushScripts(browser);
+        this.log(`browser connected: ${browser.key} (${browser.tabs.length} shared tabs)`);
+        return;
+      }
+
+      if (msg.type === "ping") return ws.send(JSON.stringify({ type: "pong" }));
+      if (msg.type === "tabs") { browser.tabs = msg.tabs || []; return; }
+      if (msg.type === "result") {
+        const p = browser.pending.get(msg.id);
+        if (!p) return;
+        browser.pending.delete(msg.id);
+        clearTimeout(p.timer);
+        msg.error ? p.reject(new Error(msg.error)) : p.resolve(msg.result);
+      }
+    });
+
+    ws.on("close", () => {
+      clearTimeout(authTimer);
+      if (!browser) return;
+      for (const p of browser.pending.values()) { clearTimeout(p.timer); p.reject(new Error("Browser disconnected")); }
+      if (this.browsers.get(browser.key) === browser) this.browsers.delete(browser.key);
+      this.log(`browser disconnected: ${browser.key}`);
+    });
+  }
+
+  register(ws, name, origin) {
+    const base = String(name).toLowerCase().replace(/[^a-z]+/g, "") || "browser";
+    // Reconnects from the same extension install keep their key.
+    for (const b of this.browsers.values()) {
+      if (b.origin === origin) { try { b.ws.close(4000, "replaced"); } catch {} this.browsers.delete(b.key); return this.add(b.key, name, ws, origin); }
+    }
+    let key = base, n = 2;
+    while (this.browsers.has(key)) key = `${base}${n++}`;
+    return this.add(key, name, ws, origin);
+  }
+
+  add(key, name, ws, origin) {
+    const b = { key, name, ws, origin, tabs: [], pending: new Map() };
+    this.browsers.set(key, b);
+    return b;
+  }
+
+  // ---- tool-facing API ----
+
+  allTabs() {
+    const out = [];
+    for (const b of this.browsers.values()) {
+      for (const t of b.tabs) out.push({ ...t, tab: `${b.key}:${t.id}`, browser: b.name });
+    }
+    return out;
+  }
+
+  resolveTab(handle) {
+    const tabs = this.allTabs();
+    if (!tabs.length) throw new Error(NO_TABS);
+    if (handle == null || handle === "") {
+      const shared = tabs.filter((t) => t.shared !== false);
+      if (shared.length === 1) return this.split(shared[0].tab);
+      const active = shared.filter((t) => t.active);
+      if (active.length === 1) return this.split(active[0].tab);
+      if (!shared.length) throw new Error(`No tab is shared yet. Pass "tab" with one of: ${tabs.map((t) => t.tab).join(", ")}`);
+      throw new Error(`Several tabs are shared. Pass "tab" with one of: ${shared.map((t) => t.tab).join(", ")}`);
+    }
+    const h = String(handle);
+    const exact = tabs.find((t) => t.tab === h) || tabs.find((t) => String(t.id) === h);
+    if (!exact) throw new Error(`Tab ${h} is not shared. Shared tabs: ${tabs.map((t) => t.tab).join(", ")}`);
+    return this.split(exact.tab);
+  }
+
+  split(handle) {
+    const i = handle.lastIndexOf(":");
+    return { browser: this.browsers.get(handle.slice(0, i)), tabId: Number(handle.slice(i + 1)), handle };
+  }
+
+  pickBrowser(name) {
+    if (!this.browsers.size) throw new Error(NO_TABS);
+    if (name) {
+      const b = this.browsers.get(name) || [...this.browsers.values()].find((x) => x.name.toLowerCase() === String(name).toLowerCase());
+      if (!b) throw new Error(`No connected browser called ${name}. Connected: ${[...this.browsers.keys()].join(", ")}`);
+      return b;
+    }
+    return [...this.browsers.values()].at(-1);
+  }
+
+  call(browser, method, params = {}, timeoutMs = 30000) {
+    if (!browser || browser.ws.readyState !== 1) return Promise.reject(new Error("That browser is no longer connected"));
+    const id = ++this.seq;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        browser.pending.delete(id);
+        reject(new Error(`${method} timed out after ${Math.round(timeoutMs / 1000)}s`));
+      }, timeoutMs);
+      browser.pending.set(id, { resolve, reject, timer });
+      browser.ws.send(JSON.stringify({ type: "call", id, method, params }));
+    });
+  }
+
+  callTab(handle, method, params = {}, timeoutMs) {
+    const { browser, tabId } = this.resolveTab(handle);
+    return this.call(browser, method, { ...params, tabId }, timeoutMs);
+  }
+
+  activity(agent, tool, handle, summary) {
+    for (const b of this.browsers.values()) {
+      if (handle && !handle.startsWith(b.key + ":")) continue;
+      const tabId = handle ? Number(handle.split(":").pop()) : null;
+      send(b, { type: "activity", agent, tool, tabId, summary, at: Date.now() });
+    }
+  }
+
+  // ---- agents + scripts ----
+
+  agentNames() {
+    return [...new Set([...this.agents.values()].map((a) => a.name))];
+  }
+
+  setAgent(sessionId, name) {
+    if (name) this.agents.set(sessionId, { name, since: Date.now() });
+    else this.agents.delete(sessionId);
+    for (const b of this.browsers.values()) send(b, { type: "agents", agents: this.agentNames() });
+  }
+
+  pushScripts(browser) {
+    const scripts = listScripts();
+    for (const b of browser ? [browser] : this.browsers.values()) send(b, { type: "scripts", scripts });
+  }
+}
+
+function send(b, msg) {
+  if (b.ws.readyState === 1) b.ws.send(JSON.stringify(msg));
+}
+
+export const NO_TABS =
+  "No tabs are shared yet. Ask the user to open the page they want help with and click the Tether button in the browser toolbar, then choose Share this tab.";

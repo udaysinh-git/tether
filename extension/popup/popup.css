@@ -1,0 +1,67 @@
+body { width: 360px; }
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px 10px;
+}
+h1 { font-size: 15px; font-weight: 500; letter-spacing: -0.01em; }
+
+.status { display: flex; align-items: center; gap: 8px; min-width: 0; color: var(--text-2); font-size: 12.5px; }
+.status span:last-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+main { padding: 0 12px 12px; display: grid; gap: 12px; }
+
+.card {
+  background: var(--card);
+  border-radius: var(--radius);
+  padding: 14px;
+  display: grid;
+  gap: 12px;
+}
+
+.page { display: flex; gap: 10px; align-items: flex-start; min-width: 0; }
+.page img, .fav {
+  flex: none; width: 16px; height: 16px; margin-top: 2px; border-radius: 4px;
+  background: var(--raised);
+}
+.page .title {
+  font-weight: 500;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.page .host { color: var(--text-3); font-size: 12.5px; }
+
+.share { width: 100%; padding: 10px 12px; }
+
+.live { display: grid; gap: 4px; }
+.live .head { display: flex; align-items: center; gap: 8px; font-weight: 500; }
+.live .what { color: var(--text-2); padding-left: 16px; }
+.row-actions { display: flex; gap: 8px; }
+.row-actions button { flex: 1; }
+
+.section { display: grid; gap: 2px; }
+.section h2 { font-size: 12.5px; font-weight: 500; color: var(--text-3); padding: 0 4px 6px; }
+
+.row {
+  display: flex; align-items: center; gap: 10px;
+  min-height: 36px; padding: 4px 4px 4px 8px; border-radius: 8px;
+}
+.row:hover { background: var(--card); }
+.row .grow { flex: 1; min-width: 0; }
+.row .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row .sub { color: var(--text-3); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.bypass { display: flex; gap: 12px; align-items: center; padding: 10px 8px 2px; }
+.bypass .grow { flex: 1; }
+.bypass .on { color: var(--amber); }
+
+.pair { display: grid; gap: 10px; }
+.pair form { display: flex; gap: 8px; }
+.pair input { flex: 1; }
+.error { color: var(--danger); font-size: 12.5px; }
+
+footer { display: flex; justify-content: space-between; align-items: center; padding: 2px 4px 0; }
+
+.result { font-size: 12.5px; color: var(--text-2); padding: 0 8px; word-break: break-word; }
