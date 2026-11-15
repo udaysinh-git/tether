@@ -97,6 +97,11 @@ export async function runWatcher(hub, w, { notify = true } = {}) {
     fire = !!result.notify;
     value = "value" in result ? result.value : result.message;
     message = result.message || short(value);
+  } else if (result && typeof result === "object" && "value" in result && "message" in result) {
+    // { value, message }: notify once each time value changes, with this message.
+    value = result.value;
+    fire = !!w.last && w.last.ok && !same(w.last.value, value);
+    message = result.message;
   } else {
     value = result;
     fire = !!w.last && w.last.ok && !same(w.last.value, value);
