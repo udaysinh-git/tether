@@ -1,6 +1,7 @@
 // Long-running host: MCP over Streamable HTTP at /mcp for agents, and a
 // WebSocket at /ext for browser extensions. Bound to 127.0.0.1 only.
 import http from "node:http";
+import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -11,7 +12,7 @@ import { watchAll, remove as removeItem } from "./scripts.js";
 import { startWatchers, setWatcherEnabled, runWatcher, getWatcher, deleteWatcher } from "./watchers.js";
 import { galleryIndex, shotOf, publishGist, forget } from "./gallery.js";
 
-const VERSION = "0.2.3";
+const VERSION = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
 const IDLE_EXIT_MS = 30 * 60 * 1000;
 
 const AGENT_NAMES = { "claude-code": "Claude Code", "codex-mcp-client": "Codex", codex: "Codex", cursor: "Cursor", "gemini-cli": "Gemini CLI" };
