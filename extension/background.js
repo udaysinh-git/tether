@@ -72,6 +72,9 @@ async function init() {
   for (const id of state.shared.keys()) {
     setBadge(id, true);
     attachCdp(id);
+    // After an update the page still shows the old copy's pill; the new
+    // content script replaces it straight away.
+    ensureContent(id).then(() => toContent(id, { cmd: "agents" }, false)).catch(() => {});
   }
   const wins = (await api.storage.session.get("agentWindows")).agentWindows ?? (await api.storage.local.get("keep_agentWindows")).keep_agentWindows ?? [];
   for (const w of wins) {
@@ -169,7 +172,7 @@ async function connect() {
   }
   ws = sock;
   sock.onopen = async () => {
-    sock.send(JSON.stringify({ type: "hello", key, browser: await browserName(), tabs: await tabList() }));
+    sock.send(JSON.stringify({ type: "hello", key, browser: await browserName(), version: api.runtime.getManifest().version, tabs: await tabList() }));
   };
   sock.onmessage = (e) => onHostMessage(sock, e.data);
   sock.onclose = (e) => {

@@ -47,10 +47,11 @@ export class Hub {
           return;
         }
         browser = this.register(ws, msg.browser || "browser", origin);
+        browser.version = msg.version || "";
         browser.tabs = msg.tabs || [];
         ws.send(JSON.stringify({ type: "welcome", id: browser.key, agents: this.agentNames() }));
         this.pushScripts(browser);
-        this.log(`browser connected: ${browser.key} (${browser.tabs.length} shared tabs)`);
+        this.log(`browser connected: ${browser.key}${browser.version ? " v" + browser.version : ""} (${browser.tabs.filter((t) => t.shared !== false).length} shared tabs)`);
         return;
       }
 

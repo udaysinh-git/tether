@@ -1,6 +1,6 @@
 {
   "name": "tether-mcp",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Hand chosen browser tabs to Claude Code, Codex or any MCP client.",
   "main": "host/cli.js",
   "scripts": {

@@ -11,7 +11,7 @@ import { watchAll, remove as removeItem } from "./scripts.js";
 import { startWatchers, setWatcherEnabled, runWatcher, getWatcher, deleteWatcher } from "./watchers.js";
 import { galleryIndex, shotOf, publishGist, forget } from "./gallery.js";
 
-const VERSION = "0.2.2";
+const VERSION = "0.2.3";
 const IDLE_EXIT_MS = 30 * 60 * 1000;
 
 const AGENT_NAMES = { "claude-code": "Claude Code", "codex-mcp-client": "Codex", codex: "Codex", cursor: "Cursor", "gemini-cli": "Gemini CLI" };
@@ -55,7 +55,7 @@ export async function serve({ quiet = false } = {}) {
 
     if (url.pathname === "/health") {
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ ok: true, name: "tether", version: VERSION, browsers: [...hub.browsers.keys()], agents: hub.agentNames(), tabs: hub.allTabs().length }));
+      res.end(JSON.stringify({ ok: true, name: "tether", version: VERSION, browsers: [...hub.browsers.values()].map((b) => (b.version ? `${b.key} v${b.version}` : b.key)), agents: hub.agentNames(), tabs: hub.allTabs().length }));
       return;
     }
 
