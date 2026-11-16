@@ -244,4 +244,4 @@ export const NO_TABS =
   "No tab is shared yet. Call start_session to open your own window in the user's browser (they approve it in a prompt), start_session with mode=current to ask for the tab they're on, or ask them to click the Tether button and choose Share this tab.";
 
 export const NO_BROWSER =
-  "No browser is connected to Tether. Ask the user to open their browser with the Tether extension installed and paired (Tether popup shows “Ready”). If they haven't set it up: run `node host/cli.js setup` in the tether repo, load dist/chrome or dist/firefox, and paste the pairing key.";
+  "No browser is connected to Tether. Ask the user to open their browser with the Tether extension installed and paired (Tether popup shows “Ready”). If they haven't set it up: run `npm install -g tether-browser` and `tether setup`, install the extension from https://github.com/udaysinh-git/tether/releases/latest, and paste the pairing key in Chromium browsers.";

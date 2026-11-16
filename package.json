@@ -1,6 +1,6 @@
 {
-  "name": "tether-mcp",
-  "version": "0.2.3",
+  "name": "tether-browser",
+  "version": "0.3.0",
   "description": "Browser MCP server and extension: Claude Code, Codex and any MCP agent use the tabs you share in Chrome or Firefox, signed in as you.",
   "main": "host/cli.js",
   "scripts": {
@@ -23,7 +23,6 @@
   "bin": {
     "tether": "host/cli.js"
   },
-  "private": true,
   "engines": {
     "node": ">=20"
   },
@@ -52,5 +51,12 @@
   },
   "bugs": {
     "url": "https://github.com/udaysinh-git/tether/issues"
-  }
+  },
+  "files": [
+    "host/",
+    "skills/",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ]
 }

@@ -38,19 +38,16 @@ Ideas, feedback and early builds live in the #tether channel of [the KuroLabs Di
 You need Node 20 or newer.
 
 ```sh
-git clone https://github.com/udaysinh-git/tether.git
-cd tether
-npm install
-npm run build
-node host/cli.js setup
+npm install -g tether-browser
+tether setup
 ```
 
 `setup` prints the lines that add Tether to your agents, prints your pairing key, and registers the bridge Firefox-based browsers use. Then:
 
-1. Add Tether to your agent. Claude Code:
+1. Add Tether to your agent with the line `setup` prints. It uses full paths, which works everywhere, including Windows. For Claude Code it looks like:
 
    ```sh
-   claude mcp add --scope user tether -- node /path/to/tether/host/cli.js
+   claude mcp add --scope user tether -- node /path/to/node_modules/tether-browser/host/cli.js
    ```
 
    Codex, in `~/.codex/config.toml` (single quotes, so Windows backslashes stay literal):
@@ -58,22 +55,34 @@ node host/cli.js setup
    ```toml
    [mcp_servers.tether]
    command = 'node'
-   args = ['/path/to/tether/host/cli.js']
+   args = ['/path/to/node_modules/tether-browser/host/cli.js']
    ```
 
    Any other MCP client runs the same command as a stdio server.
 
-2. Load the extension.
+2. Install the extension from the [latest release](https://github.com/udaysinh-git/tether/releases/latest).
 
-   Chrome, Brave or Edge: open `chrome://extensions`, turn on Developer mode, click **Load unpacked** and pick `dist/chrome`. Click the Tether icon and paste the pairing key.
+   Firefox, Zen, LibreWolf, Floorp or Waterfox: download `tether-firefox-<version>.xpi` and open it with your browser, or use `about:addons`, the gear menu, **Install Add-on From File**. It's signed by Mozilla, and no key is needed; the bridge supplies it.
 
-   Firefox, Zen, LibreWolf, Floorp or Waterfox: install a signed build (see [Keeping it installed in Firefox](#keeping-it-installed-in-firefox)), or for a quick try open `about:debugging`, choose **This Firefox**, **Load Temporary Add-on** and pick `dist/firefox/manifest.json`. No key is needed here; the bridge supplies it.
+   Chrome, Brave or Edge: download `tether-chrome-<version>.zip` and unzip it, open `chrome://extensions`, turn on Developer mode, click **Load unpacked** and pick the unzipped folder. Click the Tether icon and paste the pairing key.
 
 3. Install the skill so agents know when and how to use Tether (see [The skill](#the-skill)).
 
-4. Check everything with `node host/cli.js doctor`.
+4. Check everything with `tether doctor`.
 
 Open a page, click the Tether icon and choose **Share this tab**, or just ask your agent to do something in the browser and approve its request.
+
+### From source
+
+```sh
+git clone https://github.com/udaysinh-git/tether.git
+cd tether
+npm install
+npm run build
+node host/cli.js setup
+```
+
+Then load `dist/chrome` as an unpacked extension, or in Firefox open `about:debugging`, **This Firefox**, **Load Temporary Add-on** and pick `dist/firefox/manifest.json`.
 
 ## How it works
 
@@ -150,7 +159,7 @@ Short synthesised sounds (no audio files) mark sharing, stopping, pausing, switc
 
 ### The skill
 
-`skills/tether-browser/SKILL.md` tells agents to use Tether for browser work instead of Playwright, and covers starting sessions, the outline-and-ref loop, iframes, debugging, media, watchers, restyling, scripts, reading recordings, and when to ask you first. Link it into each agent's skills folder so it stays in sync with the repo:
+`skills/tether-browser/SKILL.md` tells agents to use Tether for browser work instead of Playwright, and covers starting sessions, the outline-and-ref loop, iframes, debugging, media, watchers, restyling, scripts, reading recordings, and when to ask you first. Link it into each agent's skills folder so it stays up to date. With the npm install, the folder is at `$(npm root -g)/tether-browser/skills/tether-browser`; from a source checkout, run this in the repo:
 
 ```powershell
 foreach ($d in "$env:USERPROFILE\.claude\skills", "$env:USERPROFILE\.codex\skills", "$env:USERPROFILE\.agents\skills") {
@@ -304,7 +313,7 @@ What sites can see: the status panel and cursor live in a closed shadow root, th
 
 ## Command line
 
-`npm link` puts `tether` on your PATH; otherwise use `node host/cli.js`.
+`npm install -g tether-browser` puts `tether` on your PATH. From a source checkout, use `npm link` or `node host/cli.js`.
 
 ```sh
 tether               # stdio MCP server (what agents run)

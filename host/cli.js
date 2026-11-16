@@ -63,6 +63,10 @@ switch (cmd) {
   }
   case "setup": {
     const node = process.execPath;
+    if (/[\\/]_npx[\\/]/.test(CLI)) {
+      console.log("You're running Tether through npx, from a temporary folder that npm can clear.");
+      console.log("Install it once so the paths below stay valid:  npm install -g tether-browser\n");
+    }
     const q = (s) => (s.includes(" ") ? `"${s}"` : s);
     console.log("Claude Code:");
     console.log(`  claude mcp add --scope user tether -- ${q(node)} ${q(CLI)}\n`);
@@ -71,6 +75,7 @@ switch (cmd) {
     console.log("Any other MCP client: run this as a stdio server:");
     console.log(`  ${q(node)} ${q(CLI)}\n`);
     console.log(`Pairing key for Chrome, Brave and Edge: ${loadConfig().key}\n`);
+    console.log("Get the extension: https://github.com/udaysinh-git/tether/releases/latest\n");
     const { installNative } = await import("./install-native.js");
     installNative();
     break;

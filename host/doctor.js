@@ -19,9 +19,12 @@ export async function doctor() {
   check(major >= 20, `Node ${process.versions.node}`, "Install Node 20 or newer.");
   check(!!cfg.key, `Config and pairing key in ${HOME}`, "Run `node host/cli.js key` to create one.");
 
-  // Extension builds
+  // Extension builds (only in a source checkout; an npm install has no
+  // extension/ folder, and the extension comes from the release instead)
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
-  for (const b of ["chrome", "firefox"]) {
+  const fromSource = fs.existsSync(path.join(ROOT, "extension"));
+  if (!fromSource) check(true, `Installed from npm (v${pkg.version}); get the extension from https://github.com/udaysinh-git/tether/releases/latest`);
+  for (const b of fromSource ? ["chrome", "firefox"] : []) {
     const m = path.join(ROOT, "dist", b, "manifest.json");
     const built = fs.existsSync(m);
     const stale = built && newestIn(path.join(ROOT, "extension")) > fs.statSync(m).mtimeMs;
