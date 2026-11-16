@@ -1,0 +1,8 @@
+Tether
+Copyright (c) 2026 Udaysinh Sapate, Kuro Labs. MIT licence, see LICENSE.
+
+Third-party material keeps its own licence:
+- extension/sounds.js: interface sounds from Bencho (https://bencho.dev), MIT,
+  (c) 2026 Lorenzo Cabra; Beacon and Plop rebuilt from cuelume by Daniel Belyi, MIT.
+- extension/fonts: Inter and Plus Jakarta Sans, SIL Open Font License 1.1
+  (OFL-inter.txt, OFL-jakarta.txt).

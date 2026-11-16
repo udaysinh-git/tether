@@ -382,4 +382,4 @@ Security problems: please report them privately through GitHub's "Report a vulne
 
 ## Licence
 
-[MIT](LICENSE), (c) 2026 Udaysinh Sapate, Kuro Labs. The interface sounds come from [Bencho](https://bencho.dev) (MIT) and the fonts are Inter and Plus Jakarta Sans (SIL Open Font License); see [LICENSE](LICENSE).
+[MIT](LICENSE), (c) 2026 Udaysinh Sapate, Kuro Labs. The interface sounds come from [Bencho](https://bencho.dev) (MIT) and the fonts are Inter and Plus Jakarta Sans (SIL Open Font License); see [NOTICE](NOTICE).
