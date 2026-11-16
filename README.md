@@ -2,7 +2,7 @@
 
 <h1 align="center">Tether</h1>
 
-<p align="center"><a href="https://tether.udaysinh.me">Website</a> · <a href="https://tether.udaysinh.me/guide/">Guide</a> · <a href="https://discord.gg/DZNXsCySDD">Discord</a></p>
+<p align="center"><a href="https://tether.udaysinh.me">Website</a> · <a href="https://tether.udaysinh.me/guide/">Guide</a> · <a href="https://discord.gg/UcB8z8u4JP">Discord</a></p>
 
 Tether lets Claude Code, Codex or any other MCP client use the browser you already use, signed in as you. You choose which tabs it gets. From there the agent can read pages, fill and submit forms, click through flows, read the network log and console, save files and media, and change how a site looks or behaves.
 
@@ -13,7 +13,7 @@ A browser extension (Chrome, Brave, Edge and other Chromium browsers; Firefox, Z
   <img src="docs/popup-shared.png" width="300" alt="Tether popup with a shared tab: Claude Code's latest action, Pause and Stop sharing, a saved style, scripts, recording and bypass switches" />
 </p>
 
-Ideas, feedback and early builds live in [the Tether Discord](https://discord.gg/DZNXsCySDD). The most requested ideas get built first.
+Ideas, feedback and early builds live in the #tether channel of [the KuroLabs Discord](https://discord.gg/UcB8z8u4JP). The most requested ideas get built first.
 
 ## Contents
 
