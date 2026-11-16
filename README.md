@@ -2,7 +2,7 @@
 
 <h1 align="center">Tether</h1>
 
-<p align="center"><a href="https://tether.udaysinh.me">Website</a> · <a href="https://tether.udaysinh.me/guide/">Guide</a> · <a href="https://discord.gg/UcB8z8u4JP">Discord</a></p>
+<p align="center"><a href="https://tether.udaysinh.me">Website</a> · <a href="https://tether.udaysinh.me/guide/">Guide</a> · <a href="https://discord.gg/UcB8z8u4JP">Discord</a> · <a href="LICENSE">MIT licence</a></p>
 
 Tether lets Claude Code, Codex or any other MCP client use the browser you already use, signed in as you. You choose which tabs it gets. From there the agent can read pages, fill and submit forms, click through flows, read the network log and console, save files and media, and change how a site looks or behaves.
 
@@ -30,6 +30,8 @@ Ideas, feedback and early builds live in the #tether channel of [the KuroLabs Di
 - [Files Tether keeps](#files-tether-keeps)
 - [Development](#development)
 - [Known limits](#known-limits)
+- [Contributing](#contributing)
+- [Licence](#licence)
 
 ## Quick start
 
@@ -183,7 +185,7 @@ Each script is a standard userscript and each style is standard UserCSS:
 
 ```
 ~/.tether/scripts/fill-timesheet.user.js     works in Tampermonkey and Violentmonkey
-~/.tether/styles/hack2skill-dark.user.css    works in Stylus
+~/.tether/styles/dark-dashboard.user.css     works in Stylus
 ```
 
 ```js
@@ -366,3 +368,18 @@ The tests load the built extension into Playwright's Chromium, serve test pages,
 - Imported UserCSS that uses `@var` settings or a preprocessor isn't supported.
 - Tab-mode watchers load the URL directly, so pages that only work when reached by clicking through a single-page app can show an error page; point the watcher at a URL that loads on its own.
 - An agent only sees a change request when it calls `get_requests`, so tell yours to check after you send one.
+
+## Contributing
+
+Issues and pull requests are welcome.
+
+1. Open an issue first for anything large, so we can agree on the approach.
+2. Run `npm run build` and `npm test` before sending a pull request. `npm test` runs both end-to-end suites with and without the debugger, which is the path Firefox takes.
+3. Keep the extension free of remote code and new permissions unless the change needs them, and say why in the pull request.
+4. Talk to us in the [Tether Discord](https://discord.gg/UcB8z8u4JP), where the roadmap comes from.
+
+Security problems: please report them privately through GitHub's "Report a vulnerability" on this repository rather than in a public issue.
+
+## Licence
+
+[MIT](LICENSE), (c) 2026 Udaysinh Sapate, Kuro Labs. The interface sounds come from [Bencho](https://bencho.dev) (MIT) and the fonts are Inter and Plus Jakarta Sans (SIL Open Font License); see [LICENSE](LICENSE).

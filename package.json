@@ -13,7 +13,7 @@
     "sign:firefox": "node scripts/build-ext.js && npx --yes web-ext@8 sign -s dist/firefox -a dist --channel unlisted",
     "doctor": "node host/cli.js doctor"
   },
-  "license": "UNLICENSED",
+  "license": "MIT",
   "type": "module",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
@@ -45,5 +45,12 @@
     "userscript",
     "usercss"
   ],
-  "author": "Udaysinh Sapate (https://udaysinh.me)"
+  "author": "Udaysinh Sapate (https://udaysinh.me)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/udaysinh-git/tether.git"
+  },
+  "bugs": {
+    "url": "https://github.com/udaysinh-git/tether/issues"
+  }
 }
