@@ -1,6 +1,6 @@
 {
   "name": "tether-browser",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Browser MCP server and extension: Claude Code, Codex and any MCP agent use the tabs you share in Chrome or Firefox, signed in as you.",
   "main": "host/cli.js",
   "scripts": {

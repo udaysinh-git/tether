@@ -554,8 +554,12 @@ api.windows.onRemoved.addListener(async (wid) => {
   if (state.agentWindows.delete(wid)) persistWindows();
 });
 
+// Each browser keeps extensions off its own add-on store: Chromium off the
+// Chrome Web Store, Firefox off addons.mozilla.org. Other stores are ordinary
+// pages in that browser.
+const STORE = IS_FIREFOX ? /^https:\/\/addons\.mozilla\.org/ : /^https:\/\/(chrome\.google\.com\/webstore|chromewebstore\.google\.com)/;
 function shareable(url = "") {
-  return /^(https?|file):/.test(url) && !/^https:\/\/(chrome\.google\.com\/webstore|chromewebstore\.google\.com|addons\.mozilla\.org)/.test(url);
+  return /^(https?|file):/.test(url) && !STORE.test(url);
 }
 
 async function persist() {
