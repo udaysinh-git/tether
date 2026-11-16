@@ -107,7 +107,7 @@ input[type="text"], input[type="number"], input[type="password"] {
   padding: 9px 12px;
   transition: border-color 0.16s, box-shadow 0.2s var(--out);
 }
-input:focus { outline: none; border-color: rgb(212 175 55 / 0.6); box-shadow: 0 0 0 4px var(--gold-soft); }
+input:focus { outline: none; border-color: rgb(212 175 55 / 0.7); }
 input::placeholder { color: var(--text-3); }
 
 a { color: var(--text-2); text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: 3px; transition: color 0.15s; }
@@ -115,16 +115,6 @@ a:hover { color: var(--text); }
 
 .dot { position: relative; display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--gold); transition: background-color 0.2s; }
 .dot.off { background: var(--text-3); opacity: 0.6; }
-/* The live dot breathes out a ring, like Bencho's live beat. */
-.live-dot::after, .dot.beat::after {
-  content: ""; position: absolute; inset: 0; border-radius: 50%;
-  background: inherit;
-  animation: beat 2.2s var(--out) infinite;
-}
-@keyframes beat {
-  0% { opacity: 0.5; scale: 1; }
-  70%, 100% { opacity: 0; scale: 2.8; }
-}
 
 .muted { color: var(--text-2); }
 .faint { color: var(--text-3); font-size: 12.5px; }
@@ -152,7 +142,6 @@ a:hover { color: var(--text); }
   top: calc((var(--h) - var(--d)) / 2); left: calc((var(--h) - var(--d)) / 2);
   width: var(--d); height: var(--d); border-radius: 50%;
   background: var(--text-2);
-  box-shadow: 0 1px 2px rgb(0 0 0 / 0.35);
   transition: translate 0.65s var(--settle), background-color 0.24s var(--out), scale 0.5s var(--spring);
 }
 .switch:hover::after { scale: 1.06; }

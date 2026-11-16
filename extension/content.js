@@ -664,16 +664,14 @@
           display: flex; justify-content: flex-end; align-items: flex-start;
           background: #1a1a1a; color: #fffbf0;
           border-radius: 999px;
-          box-shadow: 0 0 0 1px rgb(255 251 240 / .08), 0 12px 32px rgb(0 0 0 / .38), 0 2px 6px rgb(0 0 0 / .25);
+          box-shadow: 0 0 0 1px rgb(255 251 240 / .12);
           font: 400 12.5px/1.35 Inter, system-ui, "Segoe UI Variable Text", "Segoe UI", -apple-system, sans-serif;
           -webkit-font-smoothing: antialiased;
           transform-origin: 100% 100%;
         }
         .in { flex: none; display: flex; align-items: center; gap: 10px; max-width: 360px; padding: 7px 7px 7px 14px; box-sizing: border-box; }
         .dot { position: relative; flex: none; width: 8px; height: 8px; border-radius: 50%; background: #d4af37; }
-        .dot::after { content: ""; position: absolute; inset: 0; border-radius: 50%; background: inherit; animation: tether-beat 2.2s cubic-bezier(.22, 1, .36, 1) infinite; }
         .dot.rec { background: #e0806b; }
-        @keyframes tether-beat { 0% { opacity: .5; scale: 1; } 70%, 100% { opacity: 0; scale: 2.8; } }
         .lines { min-width: 0; }
         .t { font-weight: 600; letter-spacing: -0.005em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .s { color: #a9a6a0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -699,7 +697,7 @@
         button:focus-visible { outline: 2px solid #d4af37; outline-offset: 1px; }
         .hl {
           position: fixed; pointer-events: none; border-radius: 10px;
-          box-shadow: 0 0 0 2px #d4af37, 0 0 0 6px rgb(212 175 55 / .18); opacity: 0;
+          box-shadow: 0 0 0 2px #d4af37; opacity: 0;
           transition: opacity .6s cubic-bezier(.22, 1, .36, 1);
         }
         .hl.on { opacity: 1; transition: none; }
@@ -712,15 +710,14 @@
           position: absolute; left: 12px; top: 17px; padding: 3px 9px; border-radius: 999px;
           background: #d4af37; color: #1a1a1a; white-space: nowrap;
           font: 600 11.5px/1.4 Inter, system-ui, "Segoe UI Variable Text", "Segoe UI", sans-serif;
-          box-shadow: 0 4px 12px rgb(0 0 0 / .3);
         }
         .ripple {
           position: fixed; width: 30px; height: 30px; margin: -15px 0 0 -15px; border-radius: 50%;
-          background: rgb(212 175 55 / .22); box-shadow: 0 0 0 2px #d4af37; pointer-events: none; z-index: 1;
+          box-shadow: 0 0 0 2px #d4af37; pointer-events: none; z-index: 1;
           animation: tether-ripple .55s cubic-bezier(.22, 1, .36, 1) forwards;
         }
         @keyframes tether-ripple { from { transform: scale(.3); opacity: 1; } to { transform: scale(1.5); opacity: 0; } }
-        @media (prefers-reduced-motion: reduce) { .hl, .pill, button, .cur .body { transition: none; } .ripple { animation-duration: .01s; } .dot::after { animation: none; } }
+        @media (prefers-reduced-motion: reduce) { .hl, .pill, button, .cur .body { transition: none; } .ripple { animation-duration: .01s; } }
       </style>
       <div class="hl"></div>
       <div class="cur" aria-hidden="true">
