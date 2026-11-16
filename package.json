@@ -1,7 +1,7 @@
 {
   "name": "tether-mcp",
   "version": "0.2.3",
-  "description": "Hand chosen browser tabs to Claude Code, Codex or any MCP client.",
+  "description": "Browser MCP server and extension: Claude Code, Codex and any MCP agent use the tabs you share in Chrome or Firefox, signed in as you.",
   "main": "host/cli.js",
   "scripts": {
     "build": "node scripts/build-ext.js",
@@ -29,5 +29,21 @@
   },
   "devDependencies": {
     "playwright": "^1.65.1"
-  }
+  },
+  "homepage": "https://tether.udaysinh.me",
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "browser-extension",
+    "claude-code",
+    "codex",
+    "ai-agent",
+    "browser-automation",
+    "chrome",
+    "firefox",
+    "userscript",
+    "usercss"
+  ],
+  "author": "Udaysinh Sapate (https://udaysinh.me)"
 }

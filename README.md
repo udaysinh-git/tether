@@ -1,4 +1,8 @@
-# Tether
+<p align="center"><img src="docs/logo.svg" width="72" alt="Tether logo: a lowercase t whose crossbar points at a gold dot" /></p>
+
+<h1 align="center">Tether</h1>
+
+<p align="center"><a href="https://tether.udaysinh.me">Website</a> · <a href="https://tether.udaysinh.me/guide/">Guide</a> · <a href="https://discord.gg/DZNXsCySDD">Discord</a></p>
 
 Tether lets Claude Code, Codex or any other MCP client use the browser you already use, signed in as you. You choose which tabs it gets. From there the agent can read pages, fill and submit forms, click through flows, read the network log and console, save files and media, and change how a site looks or behaves.
 
@@ -9,7 +13,7 @@ A browser extension (Chrome, Brave, Edge and other Chromium browsers; Firefox, Z
   <img src="docs/popup-shared.png" width="300" alt="Tether popup with a shared tab: Claude Code's latest action, Pause and Stop sharing, a saved style, scripts, recording and bypass switches" />
 </p>
 
-Website: [tether.udaysinh.me](https://tether.udaysinh.me). Ideas, feedback and early builds: [the Tether Discord](https://discord.gg/DZNXsCySDD).
+Ideas, feedback and early builds live in [the Tether Discord](https://discord.gg/DZNXsCySDD). The most requested ideas get built first.
 
 ## Contents
 
@@ -134,6 +138,14 @@ After a click that downloads something, `wait_for_download` returns the file's p
 
 When a task needs tabs you already have open, the agent calls `request_bypass` with a reason and you allow or decline it in a prompt. You can also turn it on from the popup. While it's on, every tab is available and any tab the agent touches gets the badge and status panel. It turns off when you switch it off, press **Stop everything** or close the browser.
 
+### Look, motion and sound
+
+The interface is dark on purpose: Charcoal `#1A1A1A`, Jet `#2D2D2D`, Davy's Gray `#5A5A5A`, Off White `#FFFBF0` and one accent, Metallic Gold `#D4AF37`, which always means "an agent can use this". Surfaces are flat with hairline borders.
+
+Buttons are pills that press in and spring back, switches stretch as they slide, the popup animates between states instead of redrawing, and the status panel on the page changes shape on one spring as it moves between Shared, Paused and "needs you". Messages arrive in a stack of toasts that fans out when you point at it.
+
+Short synthesised sounds (no audio files) mark sharing, stopping, pausing, switches, prompts, an agent asking for you, and watcher alerts, plus a quiet tick as the agent clicks. Turn them off with **Play sounds** in settings.
+
 ### The skill
 
 `skills/tether-browser/SKILL.md` tells agents to use Tether for browser work instead of Playwright, and covers starting sessions, the outline-and-ref loop, iframes, debugging, media, watchers, restyling, scripts, reading recordings, and when to ask you first. Link it into each agent's skills folder so it stays in sync with the repo:
@@ -249,7 +261,7 @@ Ask for something like "tell me when this drops below 2,000" or "when the result
 Tether's settings page (popup, then **Settings**) has:
 
 - Connection: pairing key and port (Chromium only; Firefox doesn't need them).
-- Agent sessions: let agents ask to start a session; ask before an agent opens its own window; show the agent's cursor; show the status panel on pages.
+- Agent sessions: let agents ask to start a session; ask before an agent opens its own window; show the agent's cursor; play sounds; show the status panel on pages.
 - Real input (Chromium): use the debugger for clicks, typing and network capture.
 - Recording: record what you type; sites recorded automatically.
 - Gallery: every style and script by site, with switches, Download, Publish and Delete.
@@ -327,7 +339,8 @@ host/        cli.js, shim.js (stdio bridge for agents), daemon.js (HTTP + WebSoc
              UserCSS files), sites.js (recordings), requests.js, media.js, watchers.js, gallery.js,
              doctor.js, config.js
 extension/   background.js, content.js (outline, actions, cursor, status panel, recorder, picker),
-             popup/, options/, prompt/
+             motion.js (springs, in-place rendering), toast-stack.js, sounds.js, ui.css,
+             popup/, options/, prompt/, offscreen/ (plays alert sounds in Chromium), fonts/
 scripts/     build-ext.js (dist/chrome, dist/firefox), make-icons.js
 skills/      tether-browser, the agent skill
 test/        e2e.mjs, features.mjs, shots.mjs
