@@ -6,6 +6,18 @@
 // DOM in place: elements that survive a render keep their CSS transitions,
 // and only what really changed animates.
 
+import "./toast-stack.js";
+import "./sounds.js";
+
+// Sounds are on unless the user turned them off in settings.
+const api = globalThis.browser ?? globalThis.chrome;
+let soundsOn = true;
+api.storage.local.get("sounds").then((v) => { soundsOn = v.sounds !== false; }, () => {});
+api.storage.onChanged.addListener((c) => { if (c.sounds) soundsOn = c.sounds.newValue !== false; });
+export function sound(name, opts) {
+  if (soundsOn) globalThis.tetherSound.play(name, opts);
+}
+
 const reduce = matchMedia("(prefers-reduced-motion: reduce)");
 
 // stiffness 380, damping 34, mass 0.6, sampled (see the curves in ui.css)
@@ -94,24 +106,18 @@ export function rise(el) {
   );
 }
 
-// A brief toast, stacked above the others.
-export function toast(text, { tone = "" } = {}) {
-  let host = document.getElementById("toasts");
-  if (!host) {
-    host = document.createElement("div");
+// Toasts go into one stack per page (toast-stack.js, after Bencho's).
+let stack = null;
+export function toast(title, { tone = "", body = "", kind } = {}) {
+  if (!stack) {
+    const host = document.createElement("div");
     host.id = "toasts";
-    host.setAttribute("role", "status");
     document.body.appendChild(host);
+    stack = globalThis.createToastStack(host);
   }
-  const t = document.createElement("div");
-  t.className = `toast ${tone}`;
-  t.textContent = text;
-  host.appendChild(t);
-  if (!reduce.matches) t.animate([{ opacity: 0, transform: "translateY(10px) scale(0.96)", filter: "blur(6px)" }, { opacity: 1, transform: "none", filter: "blur(0)" }], { duration: 460, easing: ISLAND });
-  setTimeout(() => {
-    const out = reduce.matches ? null : t.animate([{ opacity: 1 }, { opacity: 0, transform: "translateY(-6px) scale(0.97)", filter: "blur(4px)" }], { duration: 220, easing: "ease-in", fill: "forwards" });
-    (out ? out.finished : Promise.resolve()).then(() => t.remove());
-  }, 2600);
+  const k = kind || (tone === "bad" ? "error" : "success");
+  sound(k === "error" ? "buzz" : "plop");
+  return stack.show({ kind: k, title, body });
 }
 
 // Switches: when one flips, the droplet lengthens along its travel and thins
@@ -123,6 +129,7 @@ export function liquidSwitches(root = document) {
       const el = m.target;
       if (m.attributeName !== "aria-checked" || !el.classList?.contains("switch")) continue;
       if (m.oldValue === el.getAttribute("aria-checked")) continue;
+      sound("latch", { pitch: el.getAttribute("aria-checked") === "true" ? 1.12 : 0.89 });
       el.animate(
         [{ scale: "1 1" }, { scale: "1.32 0.76", offset: 0.28 }, { scale: "0.94 1.06", offset: 0.62 }, { scale: "1 1" }],
         { duration: 560, easing: "ease-out", pseudoElement: "::after" }

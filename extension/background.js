@@ -330,10 +330,28 @@ async function setBypass(on) {
 }
 
 // Asks the user in a small window. kind: bypass | window | current.
+// Short alert sounds for moments the user isn't clicking anything: a prompt
+// opening, an agent asking for help, a watcher firing. Chromium plays them in
+// an offscreen document; Firefox's background page can play them itself.
+async function ring(name, opts) {
+  try {
+    if ((await api.storage.local.get("sounds")).sounds === false) return;
+    if (api.offscreen) {
+      if (!(await api.offscreen.hasDocument?.())) {
+        await api.offscreen.createDocument({ url: "offscreen/offscreen.html", reasons: ["AUDIO_PLAYBACK"], justification: "Plays Tether's short alert sounds" });
+      }
+      await api.runtime.sendMessage({ type: "offscreenSound", name, opts });
+    } else {
+      globalThis.tetherSound?.play(name, opts);
+    }
+  } catch {}
+}
+
 async function askUser(kind, agent, reason, detail = "") {
   const id = String(Date.now()) + Math.random().toString(36).slice(2, 6);
   const q = new URLSearchParams({ id, kind, agent: agent || "An agent", reason: reason || "", detail });
   const win = await api.windows.create({ url: api.runtime.getURL("prompt/prompt.html?" + q), type: "popup", width: 420, height: 320, focused: true });
+  ring("hail");
   const granted = await new Promise((resolve) => {
     const timer = setTimeout(() => resolve(false), 120000);
     const onClose = (wid) => { if (wid === win.id) resolve(false); };
@@ -452,6 +470,7 @@ function resumeTab(tabId, resumed = true) {
 async function waitUser(tabId, { agent, message, timeout = 300000 }) {
   if (message) {
     pauseTab(tabId, { by: "agent", agent, message });
+    ring("beacon");
     const t = await api.tabs.update(tabId, { active: true }).catch(() => null);
     if (t) api.windows.update(t.windowId, { focused: true }).catch(() => {});
   } else if (!state.paused.has(tabId)) {
@@ -906,6 +925,7 @@ async function notify({ title, message, url }) {
   if (!api.notifications) return { ok: false };
   const id = "tether-" + Date.now();
   if (url) notifyUrls.set(id, url);
+  ring("perk");
   await api.notifications.create(id, { type: "basic", iconUrl: api.runtime.getURL("icons/icon128.png"), title: String(title || "Tether"), message: String(message || "") });
   return { ok: true };
 }
@@ -1930,6 +1950,9 @@ api.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     switch (msg.type) {
       case "state":
         return popupState(msg.tabId);
+      case "ring":
+        ring(msg.name, msg.opts);
+        return { ok: true };
       case "share":
         await share(msg.tabId);
         return { ok: true };

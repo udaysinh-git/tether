@@ -148,16 +148,9 @@ a:hover { color: var(--text); }
 .switch[aria-checked="true"]::after { translate: calc(var(--w) - var(--h)) 0; background: #f6f1e9; }
 .switch:active:not(:disabled) { scale: 0.96; }
 
-/* toasts */
-#toasts { position: fixed; left: 12px; right: 12px; bottom: 12px; display: grid; gap: 8px; justify-items: center; pointer-events: none; z-index: 20; }
-.toast {
-  max-width: 100%;
-  padding: 10px 16px; border-radius: 999px;
-  background: #2b2926; color: var(--text);
-  box-shadow: 0 10px 30px rgb(0 0 0 / 0.45), inset 0 0 0 1px var(--line);
-  font-weight: 500; font-size: 13px;
-}
-.toast.bad { color: #f2c1b5; }
+/* toasts: the stack itself is styled by toast-stack.js */
+#toasts { position: fixed; left: 12px; right: 12px; bottom: 12px; z-index: 20; pointer-events: none; }
+body.wide #toasts { left: auto; right: 24px; bottom: 24px; width: 340px; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition-duration: 0s !important; animation: none !important; }

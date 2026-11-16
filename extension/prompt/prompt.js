@@ -37,6 +37,10 @@ if (reason) {
 }
 
 const answer = async (allow) => {
+  if ((await api.storage.local.get("sounds")).sounds !== false) {
+    globalThis.tetherSound?.play(allow ? "landed" : "hush");
+    await new Promise((r) => setTimeout(r, allow ? 380 : 120));
+  }
   await api.runtime.sendMessage({ type: "bypassAnswer", id, allow });
   window.close();
 };

@@ -54,7 +54,8 @@ function itemRow(kind, s) {
 
 async function load() {
   const st = await send({ type: "state", tabId: -1 });
-  const { key = "", autoRecord = [], standby, askWindow, showCursor, showPill } = await api.storage.local.get(["key", "autoRecord", "standby", "askWindow", "showCursor", "showPill"]);
+  const { key = "", autoRecord = [], standby, askWindow, showCursor, showPill, sounds } = await api.storage.local.get(["key", "autoRecord", "standby", "askWindow", "showCursor", "showPill", "sounds"]);
+  $("sounds").setAttribute("aria-checked", String(sounds !== false));
   $("showPill").setAttribute("aria-checked", String(showPill !== false));
   $("showCursor").setAttribute("aria-checked", String(showCursor !== false));
   $("standby").setAttribute("aria-checked", String(standby !== false));
@@ -129,7 +130,7 @@ $("hostSettings").addEventListener("submit", async (e) => {
 $("conn").addEventListener("submit", async (e) => {
   e.preventDefault();
   await send({ type: "setSettings", key: $("key").value, port: $("port").value });
-  toast("Saved");
+  toast("Connection saved", { body: "Tether will reconnect with the new settings." });
 });
 
 function flip(btn) {
@@ -159,6 +160,7 @@ document.addEventListener("click", async (e) => {
   if (t.id === "standby") return send({ type: "setSettings", standby: flip(t) });
   if (t.id === "askWindow") return send({ type: "setSettings", askWindow: flip(t) });
   if (t.id === "showCursor") return api.storage.local.set({ showCursor: flip(t) });
+  if (t.id === "sounds") return api.storage.local.set({ sounds: flip(t) });
   if (t.id === "showPill") return api.storage.local.set({ showPill: flip(t) });
   if (t.id === "recValues") return send({ type: "setRecordValues", on: flip(t) });
   if (t.id === "grant") {
@@ -184,7 +186,7 @@ document.addEventListener("click", async (e) => {
   }
   if (t.dataset.watchRun) {
     t.disabled = true;
-    try { await rpc("runWatcher", { id: t.dataset.watchRun }); } catch (err) { toast(err.message, { tone: "bad" }); }
+    try { await rpc("runWatcher", { id: t.dataset.watchRun }); } catch (err) { toast("That didn't work", { tone: "bad", body: err.message }); }
     return load();
   }
   if (t.dataset.watchDel) {
@@ -197,7 +199,7 @@ document.addEventListener("click", async (e) => {
     try {
       await rpc("deleteItem", { kind: t.dataset.kind, id: t.dataset.del });
     } catch (err) {
-      toast(err.message, { tone: "bad" });
+      toast("That didn't work", { tone: "bad", body: err.message });
     }
     await new Promise((r) => setTimeout(r, 400));
     return load();

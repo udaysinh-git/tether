@@ -6,7 +6,7 @@
     <link rel="stylesheet" href="../ui.css" />
     <link rel="stylesheet" href="options.css" />
   </head>
-  <body>
+  <body class="wide">
     <main>
       <h1>Tether settings</h1>
 
@@ -47,6 +47,13 @@
             <p class="faint">A pointer with the agent's name moves to each thing before it clicks or types, so you can follow along.</p>
           </div>
           <button id="showCursor" class="switch" role="switch" aria-checked="true" aria-label="Show the agent's cursor"></button>
+        </div>
+        <div class="line">
+          <div class="grow">
+            <p>Play sounds</p>
+            <p class="faint">Quiet cues when you share or stop, when an agent asks for you or for a window, when a watcher fires, and a soft tick as the agent clicks.</p>
+          </div>
+          <button id="sounds" class="switch" role="switch" aria-checked="true" aria-label="Play sounds"></button>
         </div>
         <div class="line">
           <div class="grow">

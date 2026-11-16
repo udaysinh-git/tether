@@ -367,8 +367,11 @@
     if (ms) await new Promise((res) => setTimeout(res, ms + 40));
   }
 
+  let lastTick = 0;
   function cursorClick() {
     if (!IS_TOP || !showCursor || !pillRoot || cur.x == null) return;
+    // A soft tick per click, never more than a few a second.
+    if (Date.now() - lastTick > 250) { lastTick = Date.now(); api.runtime.sendMessage({ type: "ring", name: "tick", opts: { volume: 0.55, pitch: 1.5 } }).catch(() => {}); }
     const ring = document.createElement("div");
     ring.className = "ripple";
     ring.style.left = cur.x + "px";
@@ -652,19 +655,21 @@
         :host { all: initial; }
         /* The status panel behaves like Bencho's dynamic island: one spring
            carries its size and corners between states, the words crossfade
-           through a small blur, and it nudges when something new happens. */
+           through a small blur, and it nudges when something new happens.
+           The shape (.pill) and the content (.in) are separate: while the
+           shape springs, the content is already laid out at its final size
+           and the shape clips it, so nothing reflows or wraps mid-move. */
         .pill {
           cursor: grab; user-select: none; touch-action: none;
-          display: flex; align-items: center; gap: 10px;
-          max-width: 360px; padding: 7px 7px 7px 14px;
+          display: flex; justify-content: flex-end; align-items: flex-start;
           background: #141312; color: #ece8e1;
           border-radius: 999px;
           box-shadow: 0 0 0 1px rgb(236 232 225 / .08), 0 12px 32px rgb(0 0 0 / .38), 0 2px 6px rgb(0 0 0 / .25);
           font: 400 12.5px/1.35 Inter, system-ui, "Segoe UI Variable Text", "Segoe UI", -apple-system, sans-serif;
           -webkit-font-smoothing: antialiased;
           transform-origin: 100% 100%;
-          transition: scale .2s cubic-bezier(.28, 1.4, .36, 1);
         }
+        .in { flex: none; display: flex; align-items: center; gap: 10px; max-width: 360px; padding: 7px 7px 7px 14px; box-sizing: border-box; }
         .dot { position: relative; flex: none; width: 8px; height: 8px; border-radius: 50%; background: #e8a33d; }
         .dot::after { content: ""; position: absolute; inset: 0; border-radius: 50%; background: inherit; animation: tether-beat 2.2s cubic-bezier(.22, 1, .36, 1) infinite; }
         .dot.rec { background: #e0806b; }
@@ -673,16 +678,18 @@
         .t { font-weight: 600; letter-spacing: -0.005em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .s { color: #a9a49b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .s:empty { display: none; }
-        .pill.ask { max-width: 400px; align-items: flex-start; border-radius: 22px; padding: 12px 10px 12px 16px; }
+        .pill.ask { border-radius: 22px; }
+        .pill.ask .in { max-width: 400px; align-items: flex-start; padding: 12px 10px 12px 16px; }
         .pill.ask .s { white-space: normal; color: #ece8e1; margin-top: 3px; }
         .pill.ask .dot { margin-top: 5px; }
         .pill.ask button.act { background: #e8a33d; color: #22180a; font-weight: 600; }
         .pill.ask button.act:hover { background: #f0b357; }
         button[hidden] { display: none; }
         .pill.off { display: none; }
-        .pill:active { cursor: grabbing; scale: .985; }
+        .pill:active { cursor: grabbing; }
+        .btns { flex: none; display: flex; gap: 6px; margin-left: 2px; }
         button {
-          flex: none; margin-left: 2px; padding: 6px 12px;
+          flex: none; padding: 6px 12px; min-width: 52px; white-space: nowrap;
           background: #262421; color: #ece8e1; border: 0; border-radius: 999px;
           font: inherit; font-weight: 500; cursor: pointer;
           transition: background-color .15s, scale .2s cubic-bezier(.28, 1.4, .36, 1);
@@ -723,19 +730,27 @@
         </div>
       </div>
       <div class="pill" role="status">
-        <span class="dot" aria-hidden="true"></span>
-        <div class="lines"><div class="t"></div><div class="s"></div></div>
-        <button type="button" class="act" hidden></button>
-        <button type="button" class="stop" title="Stop sharing and recording this tab">Stop</button>
+        <div class="in">
+          <span class="dot" aria-hidden="true"></span>
+          <div class="lines"><div class="t"></div><div class="s"></div></div>
+          <div class="btns">
+            <button type="button" class="act" hidden></button>
+            <button type="button" class="stop" title="Stop sharing and recording this tab">Stop</button>
+          </div>
+        </div>
       </div>`;
     pillText = pillRoot.querySelector(".t");
     pillSub = pillRoot.querySelector(".s");
     hl = pillRoot.querySelector(".hl");
-    pillRoot.querySelector("button.stop").addEventListener("click", () => api.runtime.sendMessage({ type: "stop" }));
+    const ring = (name, opts) => api.runtime.sendMessage({ type: "ring", name, opts }).catch(() => {});
+    pillRoot.querySelector("button.stop").addEventListener("click", () => { ring("hush"); api.runtime.sendMessage({ type: "stop" }); });
     makeDraggable(pillRoot.querySelector(".pill"));
     pillRoot.querySelector(".pill").title = "Drag to move. Double-click to put it back in the corner.";
     // Pause, Resume, or Done when the agent asked for help.
-    pillRoot.querySelector("button.act").addEventListener("click", () => api.runtime.sendMessage({ type: paused ? "resume" : "pause" }));
+    pillRoot.querySelector("button.act").addEventListener("click", () => {
+      ring(!paused ? "drape" : paused.by === "agent" ? "paid" : "float");
+      api.runtime.sendMessage({ type: paused ? "resume" : "pause" });
+    });
     (document.body || document.documentElement).appendChild(pillHost);
     placePill();
     renderPill();
@@ -791,18 +806,22 @@
     }
     if (!changed) return;
     const after = pill.getBoundingClientRect();
+    const inner = pill.querySelector(".in");
     const lines = pill.querySelector(".lines");
     if (Math.abs(after.width - before.width) > 1 || Math.abs(after.height - before.height) > 1 || wasAsk !== pill.classList.contains("ask")) {
-      // One spring carries the size and the corners; the words crossfade.
+      // The content holds its final layout; the shape springs around it.
       const afterRadius = getComputedStyle(pill).borderTopLeftRadius;
-      pill.animate(
+      inner.style.width = `${after.width}px`;
+      inner.style.height = `${after.height}px`;
+      const run = pill.animate(
         [
           { width: `${before.width}px`, height: `${before.height}px`, borderRadius: beforeRadius, overflow: "hidden" },
           { width: `${after.width}px`, height: `${after.height}px`, borderRadius: afterRadius, overflow: "hidden" },
         ],
         { duration: 540, easing: ISLAND }
       );
-      lines.animate([{ opacity: 0, scale: 0.92, filter: "blur(6px)" }, { opacity: 1, scale: 1, filter: "blur(0)" }], { duration: 260, delay: 60, easing: "ease-out", fill: "backwards" });
+      inner.animate([{ opacity: 0, filter: "blur(6px)" }, { opacity: 1, filter: "blur(0)" }], { duration: 300, delay: 40, easing: "ease-out", fill: "backwards" });
+      run.finished.then(() => { inner.style.width = ""; inner.style.height = ""; }, () => {});
     } else {
       // Same size, new words: they rise in and the island gives a small nudge.
       lines.animate([{ opacity: 0, transform: "translateY(5px)", filter: "blur(4px)" }, { opacity: 1, transform: "none", filter: "blur(0)" }], { duration: 320, easing: "cubic-bezier(.22, 1, .36, 1)" });

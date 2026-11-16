@@ -1,4 +1,4 @@
-import { patch, toast, liquidSwitches, rise, SPRING } from "../motion.js";
+import { patch, toast, liquidSwitches, rise, SPRING, sound } from "../motion.js";
 
 liquidSwitches();
 
@@ -345,11 +345,12 @@ async function sendComposer(button) {
   try {
     const r = await send({ type: "sendRequest", tabId, text, images: composer.images });
     closeComposer();
-    if (r.queued) toast("Saved. It will reach your agent once the Tether host is running.");
+    sound("landed");
+    if (r.queued) toast("Request saved", { body: "It reaches your agent once the Tether host runs." });
   } catch (err) {
     button.disabled = false;
     button.textContent = "Send";
-    toast(err.message, { tone: "bad" });
+    toast("That didn't work", { tone: "bad", body: err.message });
   }
 }
 
@@ -394,17 +395,21 @@ app.addEventListener("click", async (e) => {
           if (!(await api.permissions.request({ origins: ["<all_urls>"] }))) break;
         }
         await send({ type: "share", tabId });
+        sound("landed");
         break;
       case "unshare":
         await send({ type: "unshare", tabId: id });
+        sound("hush");
         break;
       case "stopAll":
         await send({ type: "stopAll" });
+        sound("hush", { pitch: 0.85 });
         break;
       case "bypass":
         await send({ type: "setBypass", on: !st.bypass });
         break;
       case "compose":
+        sound("whisk", { pitch: 1.6 });
         openComposer();
         return;
       case "pick":
@@ -417,6 +422,7 @@ app.addEventListener("click", async (e) => {
       case "pause":
       case "resume":
         await send({ type: b.dataset.act, tabId });
+        sound(b.dataset.act === "pause" ? "drape" : st.tab?.paused?.by === "agent" ? "paid" : "float");
         break;
       case "watcher":
         await send({ type: "hostRpc", method: "setWatcherEnabled", params: { id: b.dataset.id, on: b.dataset.on === "true" } });
@@ -453,7 +459,7 @@ app.addEventListener("click", async (e) => {
     }
   } catch (err) {
     if (b.dataset.act === "run") scriptResult = { id: b.dataset.id, text: err.message };
-    else toast(err.message, { tone: "bad" });
+    else toast("That didn't work", { tone: "bad", body: err.message });
   }
   refresh();
 });
