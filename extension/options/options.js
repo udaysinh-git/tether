@@ -1,3 +1,6 @@
+import { toast, liquidSwitches } from "../motion.js";
+
+liquidSwitches();
 const api = globalThis.browser ?? globalThis.chrome;
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -126,8 +129,7 @@ $("hostSettings").addEventListener("submit", async (e) => {
 $("conn").addEventListener("submit", async (e) => {
   e.preventDefault();
   await send({ type: "setSettings", key: $("key").value, port: $("port").value });
-  $("saved").textContent = "Saved.";
-  setTimeout(() => ($("saved").textContent = ""), 2000);
+  toast("Saved");
 });
 
 function flip(btn) {
@@ -182,7 +184,7 @@ document.addEventListener("click", async (e) => {
   }
   if (t.dataset.watchRun) {
     t.disabled = true;
-    try { await rpc("runWatcher", { id: t.dataset.watchRun }); } catch (err) { alert(err.message); }
+    try { await rpc("runWatcher", { id: t.dataset.watchRun }); } catch (err) { toast(err.message, { tone: "bad" }); }
     return load();
   }
   if (t.dataset.watchDel) {
@@ -195,7 +197,7 @@ document.addEventListener("click", async (e) => {
     try {
       await rpc("deleteItem", { kind: t.dataset.kind, id: t.dataset.del });
     } catch (err) {
-      alert(err.message);
+      toast(err.message, { tone: "bad" });
     }
     await new Promise((r) => setTimeout(r, 400));
     return load();

@@ -358,7 +358,7 @@
     c.style.transform = `translate(${from.x}px, ${from.y}px)`;
     c.classList.add("on");
     c.getBoundingClientRect();
-    c.style.transition = ms ? `transform ${ms}ms cubic-bezier(.2, .7, .2, 1), opacity .2s ease-out` : "opacity .2s ease-out";
+    c.style.transition = ms ? `transform ${ms}ms cubic-bezier(.22, 1, .36, 1), opacity .2s ease-out` : "opacity .2s ease-out";
     c.style.transform = `translate(${x}px, ${y}px)`;
     cur.x = x;
     cur.y = y;
@@ -374,7 +374,9 @@
     ring.style.left = cur.x + "px";
     ring.style.top = cur.y + "px";
     pillRoot.appendChild(ring);
-    setTimeout(() => ring.remove(), 500);
+    setTimeout(() => ring.remove(), 600);
+    // The pointer recoils as it clicks.
+    if (!reduceMotion()) pillRoot.querySelector(".cur .body")?.animate([{ scale: 1 }, { scale: 0.82, offset: 0.22 }, { scale: 1.1, offset: 0.55 }, { scale: 1 }], { duration: 380, easing: "ease-out" });
   }
 
   function label(el) {
@@ -648,63 +650,77 @@
     pillRoot.innerHTML = `
       <style>
         :host { all: initial; }
+        /* The status panel behaves like Bencho's dynamic island: one spring
+           carries its size and corners between states, the words crossfade
+           through a small blur, and it nudges when something new happens. */
         .pill {
           cursor: grab; user-select: none; touch-action: none;
           display: flex; align-items: center; gap: 10px;
-          max-width: 340px; padding: 8px 8px 8px 12px;
-          background: #1e1d1a; color: #ece8e1;
-          border: 1px solid rgb(236 232 225 / .1); border-radius: 12px;
-          box-shadow: 0 8px 24px rgb(0 0 0 / .28);
-          font: 400 12.5px/1.35 system-ui, "Segoe UI Variable Text", "Segoe UI", -apple-system, sans-serif;
+          max-width: 360px; padding: 7px 7px 7px 14px;
+          background: #141312; color: #ece8e1;
+          border-radius: 999px;
+          box-shadow: 0 0 0 1px rgb(236 232 225 / .08), 0 12px 32px rgb(0 0 0 / .38), 0 2px 6px rgb(0 0 0 / .25);
+          font: 400 12.5px/1.35 Inter, system-ui, "Segoe UI Variable Text", "Segoe UI", -apple-system, sans-serif;
           -webkit-font-smoothing: antialiased;
+          transform-origin: 100% 100%;
+          transition: scale .2s cubic-bezier(.28, 1.4, .36, 1);
         }
-        .dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: #e8a33d; }
+        .dot { position: relative; flex: none; width: 8px; height: 8px; border-radius: 50%; background: #e8a33d; }
+        .dot::after { content: ""; position: absolute; inset: 0; border-radius: 50%; background: inherit; animation: tether-beat 2.2s cubic-bezier(.22, 1, .36, 1) infinite; }
         .dot.rec { background: #e0806b; }
+        @keyframes tether-beat { 0% { opacity: .5; scale: 1; } 70%, 100% { opacity: 0; scale: 2.8; } }
         .lines { min-width: 0; }
-        .t { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .t { font-weight: 600; letter-spacing: -0.005em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .s { color: #a9a49b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .s:empty { display: none; }
-        .pill.ask { max-width: 400px; align-items: flex-start; }
-        .pill.ask .s { white-space: normal; color: #ece8e1; margin-top: 2px; }
-        .pill.ask .dot { margin-top: 4px; }
-        .pill.ask button.act { background: #e8a33d; color: #22180a; font-weight: 500; }
+        .pill.ask { max-width: 400px; align-items: flex-start; border-radius: 22px; padding: 12px 10px 12px 16px; }
+        .pill.ask .s { white-space: normal; color: #ece8e1; margin-top: 3px; }
+        .pill.ask .dot { margin-top: 5px; }
+        .pill.ask button.act { background: #e8a33d; color: #22180a; font-weight: 600; }
         .pill.ask button.act:hover { background: #f0b357; }
         button[hidden] { display: none; }
         .pill.off { display: none; }
-        .pill:active { cursor: grabbing; }
+        .pill:active { cursor: grabbing; scale: .985; }
         button {
-          flex: none; margin-left: 4px; padding: 5px 10px;
-          background: #2a2825; color: #ece8e1; border: 0; border-radius: 8px;
-          font: inherit; cursor: pointer;
+          flex: none; margin-left: 2px; padding: 6px 12px;
+          background: #262421; color: #ece8e1; border: 0; border-radius: 999px;
+          font: inherit; font-weight: 500; cursor: pointer;
+          transition: background-color .15s, scale .2s cubic-bezier(.28, 1.4, .36, 1);
         }
-        button:hover { background: #34312d; }
+        button:hover { background: #312e2a; }
+        button:active { scale: .94; transition-duration: .15s, .09s; }
         button:focus-visible { outline: 2px solid #e8a33d; outline-offset: 1px; }
         .hl {
-          position: fixed; pointer-events: none; border-radius: 6px;
-          box-shadow: 0 0 0 2px #e8a33d; opacity: 0;
-          transition: opacity .5s ease-out;
+          position: fixed; pointer-events: none; border-radius: 10px;
+          box-shadow: 0 0 0 2px #e8a33d, 0 0 0 6px rgb(232 163 61 / .18); opacity: 0;
+          transition: opacity .6s cubic-bezier(.22, 1, .36, 1);
         }
         .hl.on { opacity: 1; transition: none; }
-        .cur { position: fixed; left: 0; top: 0; pointer-events: none; opacity: 0; z-index: 2; will-change: transform; }
+        .cur { position: fixed; left: 0; top: 0; pointer-events: none; opacity: 0; z-index: 2; will-change: transform; transition: opacity .2s; }
         .cur.on { opacity: 1; }
-        .cur svg { display: block; filter: drop-shadow(0 1px 2px rgb(0 0 0 / .35)); }
+        .cur .body { transform-origin: 2px 2px; transition: scale .5s cubic-bezier(.28, 1.4, .36, 1); }
+        .cur:not(.on) .body { scale: .5; }
+        .cur svg { display: block; filter: drop-shadow(0 2px 4px rgb(0 0 0 / .4)); }
         .cur .name {
-          position: absolute; left: 14px; top: 18px; padding: 2px 7px; border-radius: 6px;
+          position: absolute; left: 12px; top: 17px; padding: 3px 9px; border-radius: 999px;
           background: #e8a33d; color: #22180a; white-space: nowrap;
-          font: 500 11.5px/1.4 system-ui, "Segoe UI Variable Text", "Segoe UI", sans-serif;
+          font: 600 11.5px/1.4 Inter, system-ui, "Segoe UI Variable Text", "Segoe UI", sans-serif;
+          box-shadow: 0 4px 12px rgb(0 0 0 / .3);
         }
         .ripple {
-          position: fixed; width: 28px; height: 28px; margin: -14px 0 0 -14px; border-radius: 50%;
-          border: 2px solid #e8a33d; pointer-events: none; z-index: 1;
-          animation: tether-ripple .45s ease-out forwards;
+          position: fixed; width: 30px; height: 30px; margin: -15px 0 0 -15px; border-radius: 50%;
+          background: rgb(232 163 61 / .22); box-shadow: 0 0 0 2px #e8a33d; pointer-events: none; z-index: 1;
+          animation: tether-ripple .55s cubic-bezier(.22, 1, .36, 1) forwards;
         }
-        @keyframes tether-ripple { from { transform: scale(.35); opacity: .9; } to { transform: scale(1.4); opacity: 0; } }
-        @media (prefers-reduced-motion: reduce) { .hl { transition: none; } .ripple { animation-duration: .01s; } }
+        @keyframes tether-ripple { from { transform: scale(.3); opacity: 1; } to { transform: scale(1.5); opacity: 0; } }
+        @media (prefers-reduced-motion: reduce) { .hl, .pill, button, .cur .body { transition: none; } .ripple { animation-duration: .01s; } .dot::after { animation: none; } }
       </style>
       <div class="hl"></div>
       <div class="cur" aria-hidden="true">
-        <svg width="18" height="22" viewBox="0 0 18 22"><path d="M1.5 1.5 L1.5 17.5 L5.8 13.6 L8.9 20.5 L11.8 19.2 L8.8 12.5 L14.6 12.5 Z" fill="#e8a33d" stroke="#22180a" stroke-width="1.4" stroke-linejoin="round"/></svg>
-        <span class="name"></span>
+        <div class="body">
+          <svg width="18" height="22" viewBox="0 0 18 22"><path d="M1.5 1.5 L1.5 17.5 L5.8 13.6 L8.9 20.5 L11.8 19.2 L8.8 12.5 L14.6 12.5 Z" fill="#e8a33d" stroke="#22180a" stroke-width="1.4" stroke-linejoin="round"/></svg>
+          <span class="name"></span>
+        </div>
       </div>
       <div class="pill" role="status">
         <span class="dot" aria-hidden="true"></span>
@@ -729,10 +745,17 @@
   let recording = false;
   let paused = null; // { by: "user" | "agent", agent, message }
 
+  const ISLAND = "linear(0, 0.046, 0.137, 0.252, 0.377, 0.501, 0.616, 0.717, 0.804, 0.874, 0.93, 0.976, 1.005, 1.024, 1.035, 1.04, 1.041, 1.04, 1.036, 1.031, 1.026, 1.02, 1.015, 1.011, 1.008, 1.005, 1.003, 1.001, 1, 0.999, 0.999, 0.998, 0.998, 0.998, 0.999, 0.999, 0.999, 0.999, 0.999, 1, 1)";
+  const POP = "linear(0, 0.096, 0.292, 0.534, 0.774, 0.977, 1.137, 1.22, 1.248, 1.233, 1.188, 1.13, 1.064, 1.012, 0.973, 0.949, 0.939, 0.941, 0.951, 0.966, 0.981, 0.994, 1.005, 1.012, 1.015, 1.015, 1.013, 1.009, 1.006, 1.002, 0.999, 0.997, 0.996, 0.996, 0.997, 0.998, 0.998, 0.999, 1, 1.001, 1)";
+  let pillWords = "";
+
   function renderPill() {
     if (!pillText) return;
     const act = pillRoot.querySelector("button.act");
     const pill = pillRoot.querySelector(".pill");
+    const before = pill.classList.contains("off") || !pill.getClientRects().length ? null : pill.getBoundingClientRect();
+    const beforeRadius = getComputedStyle(pill).borderTopLeftRadius;
+    const wasAsk = pill.classList.contains("ask");
     pill.classList.toggle("off", !showPill && !(shared && paused?.by === "agent"));
     pill.classList.toggle("ask", !!(paused && paused.by === "agent"));
     act.hidden = !shared;
@@ -756,6 +779,35 @@
       pillSub.textContent = "Clicks, typing and page structure, for your agent";
     }
     pillRoot.querySelector(".dot").classList.toggle("rec", recording && !shared);
+
+    const words = `${pillText.textContent}\n${pillSub.textContent}\n${act.textContent}`;
+    const changed = words !== pillWords;
+    pillWords = words;
+    if (reduceMotion() || pill.classList.contains("off")) return;
+    if (!before) {
+      // Arriving: it grows out of its corner.
+      pill.animate([{ opacity: 0, scale: 0.6, filter: "blur(6px)" }, { opacity: 1, scale: 1, filter: "blur(0)" }], { duration: 540, easing: ISLAND });
+      return;
+    }
+    if (!changed) return;
+    const after = pill.getBoundingClientRect();
+    const lines = pill.querySelector(".lines");
+    if (Math.abs(after.width - before.width) > 1 || Math.abs(after.height - before.height) > 1 || wasAsk !== pill.classList.contains("ask")) {
+      // One spring carries the size and the corners; the words crossfade.
+      const afterRadius = getComputedStyle(pill).borderTopLeftRadius;
+      pill.animate(
+        [
+          { width: `${before.width}px`, height: `${before.height}px`, borderRadius: beforeRadius, overflow: "hidden" },
+          { width: `${after.width}px`, height: `${after.height}px`, borderRadius: afterRadius, overflow: "hidden" },
+        ],
+        { duration: 540, easing: ISLAND }
+      );
+      lines.animate([{ opacity: 0, scale: 0.92, filter: "blur(6px)" }, { opacity: 1, scale: 1, filter: "blur(0)" }], { duration: 260, delay: 60, easing: "ease-out", fill: "backwards" });
+    } else {
+      // Same size, new words: they rise in and the island gives a small nudge.
+      lines.animate([{ opacity: 0, transform: "translateY(5px)", filter: "blur(4px)" }, { opacity: 1, transform: "none", filter: "blur(0)" }], { duration: 320, easing: "cubic-bezier(.22, 1, .36, 1)" });
+      pill.animate([{ scale: 1 }, { scale: 1.035 }, { scale: 1 }], { duration: 420, easing: POP });
+    }
   }
 
   function setActivity(text) {

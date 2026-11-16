@@ -40,6 +40,7 @@ const tabId = await sw.evaluate(async (u) => (await chrome.tabs.query({ url: u +
 async function popup(name, setup, after) {
   if (setup) await setup();
   const p = await ctx.newPage();
+  p.on("pageerror", (e) => console.error(`popup ${name}:`, e.message));
   await p.setViewportSize({ width: 360, height: 520 });
   await p.addInitScript((id) => {
     const q = chrome.tabs.query.bind(chrome.tabs);
@@ -82,14 +83,14 @@ await popup("composer", null, async (p) => {
 });
 await tab.bringToFront();
 await sw.evaluate((id) => chrome.tabs.sendMessage(id, { cmd: "activity", agent: "Claude Code", summary: "clicked “New invoice”", agents: ["Claude Code"] }), tabId);
-await wait(300);
+await wait(800);
 await tab.screenshot({ path: path.join(out, "page-pill.png") });
 
 // The agent's cursor heading for a button.
 const snapText = (await sw.evaluate((id) => chrome.tabs.sendMessage(id, { cmd: "snapshot" }, { frameId: 0 }), tabId)).text;
 const btnRef = snapText.match(/button "New invoice" \[(e\d+)\]/)[1];
 await sw.evaluate(({ id, ref }) => chrome.tabs.sendMessage(id, { cmd: "hover", ref, agents: ["Claude Code"] }, { frameId: 0 }), { id: tabId, ref: btnRef });
-await wait(150);
+await wait(700);
 await tab.screenshot({ path: path.join(out, "cursor.png"), clip: { x: 0, y: 0, width: 700, height: 420 } });
 
 // Drag the pill up to the top-left.
@@ -105,7 +106,7 @@ await wait(200);
 
 // The agent hands the tab to the user.
 await sw.evaluate((id) => pauseTab(id, { by: "agent", agent: "Claude Code", message: "Please type the 6-digit code from your phone, then press Done." }), tabId);
-await wait(300);
+await wait(800);
 await tab.screenshot({ path: path.join(out, "page-pill-ask.png"), clip: { x: 500, y: 520, width: 500, height: 120 } });
 await popup("paused-agent");
 await sw.evaluate((id) => { resumeTab(id, true); pauseTab(id, { by: "user" }); }, tabId);

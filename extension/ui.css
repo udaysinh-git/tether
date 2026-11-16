@@ -9,21 +9,36 @@ Moment:    the current-tab card. Unshared, it is one amber "Share this tab" butt
            ticking ("Codex clicked “Continue” · 4s ago").
 Signature: the amber dot, used for shared state everywhere: badge, rows, page pill.
 Concept:   the popup is the lamp switch; nothing else competes with it.
+Motion:    after Bencho's micro-interactions (bencho.dev, MIT): one spring for
+           anything that settles, a quick press-in with an overshooting release,
+           pill shapes, and changes that crossfade through a small blur.
 */
+@font-face { font-family: "Inter Tether"; src: url("fonts/inter.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
+@font-face { font-family: "Jakarta Tether"; src: url("fonts/jakarta.woff2") format("woff2"); font-weight: 200 800; font-display: swap; }
+
 :root {
-  --bg: #161513;
-  --card: #1e1d1a;
-  --raised: #282623;
-  --raised-hover: #312e2a;
-  --line: rgb(236 232 225 / 0.08);
+  --bg: #121110;
+  --card: #1b1a18;
+  --raised: #252321;
+  --raised-hover: #2e2c29;
+  --line: rgb(236 232 225 / 0.07);
   --text: #ece8e1;
   --text-2: #a9a49b;
   --text-3: #8a857c;
   --amber: #e8a33d;
   --amber-hover: #f0b357;
   --amber-ink: #22180a;
+  --amber-soft: rgb(232 163 61 / 0.14);
   --danger: #e0806b;
-  --radius: 12px;
+  --radius: 18px;
+  --font: "Inter Tether", system-ui, "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-head: "Jakarta Tether", var(--font);
+  /* springs sampled from stiffness/damping/mass, as Bencho tunes them */
+  --spring: linear(0, 0.051, 0.15, 0.264, 0.375, 0.464, 0.553, 0.63, 0.695, 0.742, 0.788, 0.826, 0.857, 0.883, 0.901, 0.919, 0.934, 0.946, 0.954, 0.963, 0.969, 0.975, 0.979, 0.983, 0.986, 0.988, 0.99, 0.992, 0.993, 0.995, 0.996, 0.996, 0.997, 0.998, 0.998, 0.998, 0.999, 0.999, 0.999, 0.999, 1); /* 380/34/0.6, 520ms */
+  --settle: linear(0, 0.026, 0.085, 0.165, 0.246, 0.338, 0.429, 0.514, 0.585, 0.655, 0.718, 0.766, 0.813, 0.852, 0.885, 0.909, 0.931, 0.949, 0.963, 0.973, 0.982, 0.989, 0.993, 0.997, 0.999, 1.001, 1.002, 1.003, 1.003, 1.003, 1.003, 1.003, 1.003, 1.002, 1.002, 1.002, 1.002, 1.001, 1.001, 1.001, 1); /* 170/21.5/0.9, 650ms */
+  --island: linear(0, 0.046, 0.137, 0.252, 0.377, 0.501, 0.616, 0.717, 0.804, 0.874, 0.93, 0.976, 1.005, 1.024, 1.035, 1.04, 1.041, 1.04, 1.036, 1.031, 1.026, 1.02, 1.015, 1.011, 1.008, 1.005, 1.003, 1.001, 1, 0.999, 0.999, 0.998, 0.998, 0.998, 0.999, 0.999, 0.999, 0.999, 0.999, 1, 1); /* 380/26/0.9, 540ms */
+  --press: cubic-bezier(0.28, 1.4, 0.36, 1);
+  --out: cubic-bezier(0.22, 1, 0.36, 1);
   color-scheme: dark;
 }
 
@@ -33,36 +48,41 @@ html, body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font: 400 13.5px/1.45 system-ui, "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  font: 400 13.5px/1.45 var(--font);
+  font-feature-settings: "cv11", "ss03";
   -webkit-font-smoothing: antialiased;
   font-variant-numeric: tabular-nums;
 }
 
 h1, h2, h3, p { margin: 0; }
+h1 { font-family: var(--font-head); }
 
+/* Buttons are pills. They press in quickly and come back with a little
+   overshoot, the way Bencho's do. */
 button {
   font: inherit;
+  font-weight: 500;
   color: inherit;
   border: 0;
   cursor: pointer;
-  border-radius: 8px;
-  padding: 8px 12px;
+  border-radius: 999px;
+  padding: 8px 14px;
   background: var(--raised);
-  transition: background-color 0.12s ease-out;
+  transition: background-color 0.15s, color 0.15s, opacity 0.14s, scale 0.2s var(--press);
 }
 button:hover { background: var(--raised-hover); }
-button:active { transform: translateY(0.5px); }
+button:active:not(:disabled) { scale: 0.96; transition-duration: 0.15s, 0.15s, 0.14s, 0.09s; transition-timing-function: ease, ease, ease, ease-out; }
 button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
 button:disabled { opacity: 0.5; cursor: default; }
 
 .primary {
   background: var(--amber);
   color: var(--amber-ink);
-  font-weight: 500;
+  font-weight: 600;
 }
 .primary:hover { background: var(--amber-hover); }
 
-.quiet { background: transparent; color: var(--text-2); padding: 4px 8px; }
+.quiet { background: transparent; color: var(--text-2); padding: 5px 10px; }
 .quiet:hover { background: var(--raised); color: var(--text); }
 
 input[type="text"], input[type="number"], input[type="password"] {
@@ -71,36 +91,74 @@ input[type="text"], input[type="number"], input[type="password"] {
   color: var(--text);
   background: var(--bg);
   border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 8px 10px;
+  border-radius: 12px;
+  padding: 9px 12px;
+  transition: border-color 0.16s, box-shadow 0.2s var(--out);
 }
+input:focus { outline: none; border-color: rgb(232 163 61 / 0.6); box-shadow: 0 0 0 4px var(--amber-soft); }
 input::placeholder { color: var(--text-3); }
 
-a { color: var(--text-2); text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: 3px; }
+a { color: var(--text-2); text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: 3px; transition: color 0.15s; }
 a:hover { color: var(--text); }
 
-.dot { display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--amber); }
+.dot { position: relative; display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--amber); transition: background-color 0.2s; }
 .dot.off { background: var(--text-3); opacity: 0.6; }
+/* The live dot breathes out a ring, like Bencho's live beat. */
+.live-dot::after, .dot.beat::after {
+  content: ""; position: absolute; inset: 0; border-radius: 50%;
+  background: inherit;
+  animation: beat 2.2s var(--out) infinite;
+}
+@keyframes beat {
+  0% { opacity: 0.5; scale: 1; }
+  70%, 100% { opacity: 0; scale: 2.8; }
+}
 
 .muted { color: var(--text-2); }
 .faint { color: var(--text-3); font-size: 12.5px; }
 
 .cmd {
   display: inline-block;
-  padding: 1px 6px;
-  border-radius: 5px;
+  padding: 1px 7px;
+  border-radius: 6px;
   background: var(--raised);
   color: var(--text);
 }
 
-/* switch */
-.switch { position: relative; flex: none; width: 34px; height: 20px; padding: 0; border-radius: 10px; background: var(--raised); }
-.switch::after {
-  content: ""; position: absolute; top: 3px; left: 3px;
-  width: 14px; height: 14px; border-radius: 50%;
-  background: var(--text-2);
-  transition: transform 0.15s ease-out, background-color 0.15s ease-out;
+/* Switch: a droplet sitting in its slot with air all round. It crosses on
+   the settling spring and stretches along its travel (motion.js), and it
+   swells a touch under the pointer. */
+.switch {
+  --w: 40px; --h: 24px; --d: 18px;
+  position: relative; flex: none; width: var(--w); height: var(--h); padding: 0;
+  border-radius: 999px; background: var(--raised);
+  transition: background-color 0.24s var(--out), scale 0.2s var(--press);
 }
+.switch:hover { background: var(--raised-hover); }
+.switch::after {
+  content: ""; position: absolute;
+  top: calc((var(--h) - var(--d)) / 2); left: calc((var(--h) - var(--d)) / 2);
+  width: var(--d); height: var(--d); border-radius: 50%;
+  background: var(--text-2);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.35);
+  transition: translate 0.65s var(--settle), background-color 0.24s var(--out), scale 0.5s var(--spring);
+}
+.switch:hover::after { scale: 1.06; }
 .switch[aria-checked="true"] { background: var(--amber); }
-.switch[aria-checked="true"]::after { transform: translateX(14px); background: var(--amber-ink); }
-@media (prefers-reduced-motion: reduce) { .switch::after, button { transition: none; } }
+.switch[aria-checked="true"]::after { translate: calc(var(--w) - var(--h)) 0; background: #f6f1e9; }
+.switch:active:not(:disabled) { scale: 0.96; }
+
+/* toasts */
+#toasts { position: fixed; left: 12px; right: 12px; bottom: 12px; display: grid; gap: 8px; justify-items: center; pointer-events: none; z-index: 20; }
+.toast {
+  max-width: 100%;
+  padding: 10px 16px; border-radius: 999px;
+  background: #2b2926; color: var(--text);
+  box-shadow: 0 10px 30px rgb(0 0 0 / 0.45), inset 0 0 0 1px var(--line);
+  font-weight: 500; font-size: 13px;
+}
+.toast.bad { color: #f2c1b5; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition-duration: 0s !important; animation: none !important; }
+}

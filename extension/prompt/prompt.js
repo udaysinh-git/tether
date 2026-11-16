@@ -26,6 +26,7 @@ const COPY = {
 const c = COPY[kind] || COPY.bypass;
 document.title = `Tether: ${c.title}`;
 document.getElementById("title").textContent = c.title;
+document.getElementById("initial").textContent = (agent.trim()[0] || "A").toUpperCase();
 document.getElementById("body").textContent = c.body;
 document.getElementById("allow").textContent = c.allow;
 const reason = q.get("reason");

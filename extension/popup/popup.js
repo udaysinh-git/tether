@@ -1,3 +1,7 @@
+import { patch, toast, liquidSwitches, rise, SPRING } from "../motion.js";
+
+liquidSwitches();
+
 const api = globalThis.browser ?? globalThis.chrome;
 const app = document.getElementById("app");
 const statusEl = document.getElementById("status");
@@ -35,7 +39,7 @@ function renderStatus() {
   else if (st.conn === "waiting" || st.conn === "connecting") text = st.tab?.shared ? "Waiting for the host" : "No agent running";
   else if (st.conn === "denied") text = "Pairing failed";
   else text = "Idle";
-  statusEl.innerHTML = `<span class="dot ${dot}"></span><span>${esc(text)}</span>`;
+  patch(statusEl, `<span class="dot ${dot}"></span><span data-rise>${esc(text)}</span>`);
 }
 
 function pairCard() {
@@ -72,7 +76,7 @@ function tabCard() {
   if (!t.shared) {
     const hint = st.bypass ? "Bypass mode is on, so agents can already reach this tab." : "Agents can read and use this tab, and any tab it opens, until you stop.";
     return `
-      <section class="card">
+      <section class="card" data-morph="tab">
         ${page}
         <button class="primary share" data-act="share">Share this tab</button>
         <p class="faint">${hint}</p>
@@ -87,11 +91,11 @@ function tabCard() {
   if (t.paused?.by === "agent") { how = `${esc(t.paused.agent || who)} needs you on this page`; detail = esc(t.paused.message || ""); }
   else if (t.paused) { how = "Paused"; detail = `${esc(who)} will wait until you resume.`; }
   return `
-    <section class="card">
+    <section class="card" data-morph="tab">
       ${page}
       <div class="live">
-        <p class="head"><span class="dot"></span>${how}</p>
-        <p class="what">${detail}</p>
+        <p class="head" data-rise><span class="dot live-dot"></span>${how}</p>
+        <p class="what" data-rise>${detail}</p>
       </div>
       <div class="row-actions">
         <button data-act="${t.paused ? "resume" : "pause"}" ${t.paused?.by === "agent" ? 'class="primary"' : ""}>${t.paused?.by === "agent" ? "Done" : t.paused ? "Resume" : "Pause"}</button>
@@ -259,8 +263,8 @@ function recordSection() {
 function render() {
   renderStatus();
   const err = st.conn === "denied" && st.connError ? `<p class="error" style="padding:0 4px">${esc(st.connError)}</p>` : "";
-  document.getElementById("top").innerHTML = (st.paired ? tabCard() : pairCard()) + err + requestsSection();
-  document.getElementById("rest").innerHTML = othersSection() + stylesSection() + scriptsSection() + watchersSection() + recordSection() + (st.paired ? pillRow() + bypassRow() : "") + footer();
+  patch(document.getElementById("top"), (st.paired ? tabCard() : pairCard()) + err + requestsSection());
+  patch(document.getElementById("rest"), othersSection() + stylesSection() + scriptsSection() + watchersSection() + recordSection() + (st.paired ? pillRow() + bypassRow() : "") + footer());
 }
 
 // ---------------------------------------------------------------- composer
@@ -282,6 +286,7 @@ function openComposer() {
       <button class="primary" data-act="sendReq">Send</button>
     </div>
     <p class="faint">Sending shares this tab so your agent can try changes on it.</p>`;
+  composerEl.animate([{ opacity: 0, transform: "translateY(8px) scale(0.98)", filter: "blur(6px)" }, { opacity: 1, transform: "none", filter: "blur(0)" }], { duration: 460, easing: SPRING });
   document.getElementById("reqText").focus();
   document.getElementById("reqFiles").addEventListener("change", (e) => addImages([...e.target.files]));
   render();
@@ -299,6 +304,8 @@ function renderThumbs() {
   document.getElementById("thumbs").innerHTML = composer.images
     .map((img, i) => `<div class="thumb"><img src="${img.dataUrl}" alt="${esc(img.name)}" /><button type="button" data-act="dropImg" data-i="${i}" aria-label="Remove ${esc(img.name)}">×</button></div>`)
     .join("");
+  const last = document.getElementById("thumbs").lastElementChild;
+  if (last) last.animate([{ opacity: 0, transform: "scale(0.6)" }, { opacity: 1, transform: "none" }], { duration: 520, easing: "linear(0, 0.096, 0.292, 0.534, 0.774, 0.977, 1.137, 1.22, 1.248, 1.233, 1.188, 1.13, 1.064, 1.012, 0.973, 0.949, 0.939, 0.941, 0.951, 0.966, 0.981, 0.994, 1.005, 1.012, 1.015, 1.015, 1.013, 1.009, 1.006, 1.002, 0.999, 0.997, 0.996, 0.996, 0.997, 0.998, 0.998, 0.999, 1, 1.001, 1)" });
 }
 
 // Large screenshots are scaled to 1600px on the long side to keep requests small.
@@ -338,11 +345,11 @@ async function sendComposer(button) {
   try {
     const r = await send({ type: "sendRequest", tabId, text, images: composer.images });
     closeComposer();
-    if (r.queued) alert("Saved. It will reach your agent once the Tether host is running.");
+    if (r.queued) toast("Saved. It will reach your agent once the Tether host is running.");
   } catch (err) {
     button.disabled = false;
     button.textContent = "Send";
-    alert(err.message);
+    toast(err.message, { tone: "bad" });
   }
 }
 
@@ -446,7 +453,7 @@ app.addEventListener("click", async (e) => {
     }
   } catch (err) {
     if (b.dataset.act === "run") scriptResult = { id: b.dataset.id, text: err.message };
-    else alert(err.message);
+    else toast(err.message, { tone: "bad" });
   }
   refresh();
 });
