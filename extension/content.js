@@ -662,44 +662,44 @@
         .pill {
           cursor: grab; user-select: none; touch-action: none;
           display: flex; justify-content: flex-end; align-items: flex-start;
-          background: #141312; color: #ece8e1;
+          background: #1a1a1a; color: #fffbf0;
           border-radius: 999px;
-          box-shadow: 0 0 0 1px rgb(236 232 225 / .08), 0 12px 32px rgb(0 0 0 / .38), 0 2px 6px rgb(0 0 0 / .25);
+          box-shadow: 0 0 0 1px rgb(255 251 240 / .08), 0 12px 32px rgb(0 0 0 / .38), 0 2px 6px rgb(0 0 0 / .25);
           font: 400 12.5px/1.35 Inter, system-ui, "Segoe UI Variable Text", "Segoe UI", -apple-system, sans-serif;
           -webkit-font-smoothing: antialiased;
           transform-origin: 100% 100%;
         }
         .in { flex: none; display: flex; align-items: center; gap: 10px; max-width: 360px; padding: 7px 7px 7px 14px; box-sizing: border-box; }
-        .dot { position: relative; flex: none; width: 8px; height: 8px; border-radius: 50%; background: #e8a33d; }
+        .dot { position: relative; flex: none; width: 8px; height: 8px; border-radius: 50%; background: #d4af37; }
         .dot::after { content: ""; position: absolute; inset: 0; border-radius: 50%; background: inherit; animation: tether-beat 2.2s cubic-bezier(.22, 1, .36, 1) infinite; }
         .dot.rec { background: #e0806b; }
         @keyframes tether-beat { 0% { opacity: .5; scale: 1; } 70%, 100% { opacity: 0; scale: 2.8; } }
         .lines { min-width: 0; }
         .t { font-weight: 600; letter-spacing: -0.005em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .s { color: #a9a49b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .s { color: #a9a6a0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .s:empty { display: none; }
         .pill.ask { border-radius: 22px; }
         .pill.ask .in { max-width: 400px; align-items: flex-start; padding: 12px 10px 12px 16px; }
-        .pill.ask .s { white-space: normal; color: #ece8e1; margin-top: 3px; }
+        .pill.ask .s { white-space: normal; color: #fffbf0; margin-top: 3px; }
         .pill.ask .dot { margin-top: 5px; }
-        .pill.ask button.act { background: #e8a33d; color: #22180a; font-weight: 600; }
-        .pill.ask button.act:hover { background: #f0b357; }
+        .pill.ask button.act { background: #d4af37; color: #1a1a1a; font-weight: 600; }
+        .pill.ask button.act:hover { background: #e0bf55; }
         button[hidden] { display: none; }
         .pill.off { display: none; }
         .pill:active { cursor: grabbing; }
         .btns { flex: none; display: flex; gap: 6px; margin-left: 2px; }
         button {
           flex: none; padding: 6px 12px; min-width: 52px; white-space: nowrap;
-          background: #262421; color: #ece8e1; border: 0; border-radius: 999px;
+          background: #2d2d2d; color: #fffbf0; border: 0; border-radius: 999px;
           font: inherit; font-weight: 500; cursor: pointer;
           transition: background-color .15s, scale .2s cubic-bezier(.28, 1.4, .36, 1);
         }
-        button:hover { background: #312e2a; }
+        button:hover { background: #363636; }
         button:active { scale: .94; transition-duration: .15s, .09s; }
-        button:focus-visible { outline: 2px solid #e8a33d; outline-offset: 1px; }
+        button:focus-visible { outline: 2px solid #d4af37; outline-offset: 1px; }
         .hl {
           position: fixed; pointer-events: none; border-radius: 10px;
-          box-shadow: 0 0 0 2px #e8a33d, 0 0 0 6px rgb(232 163 61 / .18); opacity: 0;
+          box-shadow: 0 0 0 2px #d4af37, 0 0 0 6px rgb(212 175 55 / .18); opacity: 0;
           transition: opacity .6s cubic-bezier(.22, 1, .36, 1);
         }
         .hl.on { opacity: 1; transition: none; }
@@ -710,13 +710,13 @@
         .cur svg { display: block; filter: drop-shadow(0 2px 4px rgb(0 0 0 / .4)); }
         .cur .name {
           position: absolute; left: 12px; top: 17px; padding: 3px 9px; border-radius: 999px;
-          background: #e8a33d; color: #22180a; white-space: nowrap;
+          background: #d4af37; color: #1a1a1a; white-space: nowrap;
           font: 600 11.5px/1.4 Inter, system-ui, "Segoe UI Variable Text", "Segoe UI", sans-serif;
           box-shadow: 0 4px 12px rgb(0 0 0 / .3);
         }
         .ripple {
           position: fixed; width: 30px; height: 30px; margin: -15px 0 0 -15px; border-radius: 50%;
-          background: rgb(232 163 61 / .22); box-shadow: 0 0 0 2px #e8a33d; pointer-events: none; z-index: 1;
+          background: rgb(212 175 55 / .22); box-shadow: 0 0 0 2px #d4af37; pointer-events: none; z-index: 1;
           animation: tether-ripple .55s cubic-bezier(.22, 1, .36, 1) forwards;
         }
         @keyframes tether-ripple { from { transform: scale(.3); opacity: 1; } to { transform: scale(1.5); opacity: 0; } }
@@ -725,7 +725,7 @@
       <div class="hl"></div>
       <div class="cur" aria-hidden="true">
         <div class="body">
-          <svg width="18" height="22" viewBox="0 0 18 22"><path d="M1.5 1.5 L1.5 17.5 L5.8 13.6 L8.9 20.5 L11.8 19.2 L8.8 12.5 L14.6 12.5 Z" fill="#e8a33d" stroke="#22180a" stroke-width="1.4" stroke-linejoin="round"/></svg>
+          <svg width="18" height="22" viewBox="0 0 18 22"><path d="M1.5 1.5 L1.5 17.5 L5.8 13.6 L8.9 20.5 L11.8 19.2 L8.8 12.5 L14.6 12.5 Z" fill="#d4af37" stroke="#1a1a1a" stroke-width="1.4" stroke-linejoin="round"/></svg>
           <span class="name"></span>
         </div>
       </div>
@@ -1153,17 +1153,17 @@
     root.innerHTML = `
       <style>
         :host { all: initial; }
-        .box { position: fixed; border-radius: 4px; box-shadow: 0 0 0 2px #e8a33d, 0 0 0 9999px rgb(0 0 0 / .18); pointer-events: none; }
-        .tag { position: fixed; padding: 3px 8px; border-radius: 6px; background: #1e1d1a; color: #ece8e1; font: 400 12px/1.3 system-ui, "Segoe UI", sans-serif; pointer-events: none; white-space: nowrap; max-width: 60vw; overflow: hidden; text-overflow: ellipsis; }
-        .hint { position: fixed; left: 50%; top: 16px; transform: translateX(-50%); padding: 8px 12px; border-radius: 10px; background: #1e1d1a; color: #ece8e1; font: 400 12.5px/1.35 system-ui, "Segoe UI", sans-serif; box-shadow: 0 8px 24px rgb(0 0 0 / .28); pointer-events: none; }
-        .panel { position: fixed; width: 320px; padding: 12px; border-radius: 12px; background: #1e1d1a; color: #ece8e1; box-shadow: 0 8px 24px rgb(0 0 0 / .3); border: 1px solid rgb(236 232 225 / .1); font: 400 13px/1.4 system-ui, "Segoe UI", sans-serif; pointer-events: auto; display: grid; gap: 10px; }
-        .panel p { margin: 0; color: #a9a49b; font-size: 12.5px; }
-        textarea { width: 100%; box-sizing: border-box; min-height: 72px; resize: vertical; font: inherit; color: #ece8e1; background: #161513; border: 1px solid rgb(236 232 225 / .1); border-radius: 8px; padding: 8px 10px; }
-        textarea:focus { outline: none; border-color: #e8a33d; }
+        .box { position: fixed; border-radius: 4px; box-shadow: 0 0 0 2px #d4af37, 0 0 0 9999px rgb(0 0 0 / .18); pointer-events: none; }
+        .tag { position: fixed; padding: 3px 8px; border-radius: 6px; background: #232323; color: #fffbf0; font: 400 12px/1.3 system-ui, "Segoe UI", sans-serif; pointer-events: none; white-space: nowrap; max-width: 60vw; overflow: hidden; text-overflow: ellipsis; }
+        .hint { position: fixed; left: 50%; top: 16px; transform: translateX(-50%); padding: 8px 12px; border-radius: 10px; background: #232323; color: #fffbf0; font: 400 12.5px/1.35 system-ui, "Segoe UI", sans-serif; box-shadow: 0 8px 24px rgb(0 0 0 / .28); pointer-events: none; }
+        .panel { position: fixed; width: 320px; padding: 12px; border-radius: 12px; background: #232323; color: #fffbf0; box-shadow: 0 8px 24px rgb(0 0 0 / .3); border: 1px solid rgb(255 251 240 / .1); font: 400 13px/1.4 system-ui, "Segoe UI", sans-serif; pointer-events: auto; display: grid; gap: 10px; }
+        .panel p { margin: 0; color: #a9a6a0; font-size: 12.5px; }
+        textarea { width: 100%; box-sizing: border-box; min-height: 72px; resize: vertical; font: inherit; color: #fffbf0; background: #1a1a1a; border: 1px solid rgb(255 251 240 / .1); border-radius: 8px; padding: 8px 10px; }
+        textarea:focus { outline: none; border-color: #d4af37; }
         .row { display: flex; gap: 8px; justify-content: flex-end; }
-        button { font: inherit; border: 0; border-radius: 8px; padding: 7px 12px; cursor: pointer; background: #2a2825; color: #ece8e1; }
-        button.primary { background: #e8a33d; color: #22180a; font-weight: 500; }
-        button:focus-visible { outline: 2px solid #e8a33d; outline-offset: 2px; }
+        button { font: inherit; border: 0; border-radius: 8px; padding: 7px 12px; cursor: pointer; background: #2d2d2d; color: #fffbf0; }
+        button.primary { background: #d4af37; color: #1a1a1a; font-weight: 500; }
+        button:focus-visible { outline: 2px solid #d4af37; outline-offset: 2px; }
       </style>
       <div class="box" hidden></div><div class="tag" hidden></div>
       <div class="hint">Click the part of the page you mean. Esc to cancel.</div>`;

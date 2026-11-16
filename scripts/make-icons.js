@@ -1,30 +1,34 @@
-// Draws the toolbar icon (a ring tethered to an amber dot) as PNGs, no deps.
+// Draws the toolbar icon, no deps: a lowercase "t" on a Jet tile whose
+// crossbar points at a gold dot, the tether. Same geometry as logo.svg
+// (a 32-unit grid), drawn with 4x4 supersampling.
 import fs from "node:fs";
 import zlib from "node:zlib";
 
-const BG = [30, 29, 26], INK = [236, 232, 225], AMBER = [232, 163, 61];
+const TILE = [45, 45, 45], INK = [255, 251, 240], GOLD = [212, 175, 55];
+
+const seg = (x, y, ax, ay, bx, by) => {
+  const dx = bx - ax, dy = by - ay;
+  const t = Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy)));
+  return Math.hypot(x - (ax + t * dx), y - (ay + t * dy));
+};
+// quarter arc centred (17.5, 19.5), radius 5, from the stem's foot round to the bottom
+const arc = (x, y) => {
+  const a = Math.atan2(y - 19.5, x - 17.5);
+  if (a >= Math.PI / 2 && a <= Math.PI) return Math.abs(Math.hypot(x - 17.5, y - 19.5) - 5);
+  return Math.min(Math.hypot(x - 12.5, y - 19.5), Math.hypot(x - 17.5, y - 24.5));
+};
 
 function render(size) {
-  const ss = 4, N = size * ss;
+  const ss = 4, N = size * ss, k = 32 / N;
   const px = new Float32Array(size * size * 4);
-  const r = N * 0.22; // corner radius
-  const ring = { x: N * 0.33, y: N * 0.67, r: N * 0.13, w: N * 0.065 };
-  const dot = { x: N * 0.68, y: N * 0.32, r: N * 0.15 };
-  const segDist = (x, y, ax, ay, bx, by) => {
-    const dx = bx - ax, dy = by - ay;
-    const t = Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy)));
-    return Math.hypot(x - (ax + t * dx), y - (ay + t * dy));
-  };
   for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
-    const cx = x + 0.5, cy = y + 0.5;
-    const qx = Math.max(r - cx, 0, cx - (N - r)), qy = Math.max(r - cy, 0, cy - (N - r));
+    const u = (x + 0.5) * k, v = (y + 0.5) * k; // in the 32 grid
+    const r = 8, qx = Math.max(r - u, 0, u - (32 - r)), qy = Math.max(r - v, 0, v - (32 - r));
     if (Math.hypot(qx, qy) > r) continue;
-    let c = BG;
-    const dRing = Math.abs(Math.hypot(cx - ring.x, cy - ring.y) - ring.r);
-    const ang = Math.atan2(dot.y - ring.y, dot.x - ring.x);
-    const sx = ring.x + Math.cos(ang) * ring.r, sy = ring.y + Math.sin(ang) * ring.r;
-    if (dRing < ring.w / 2 || segDist(cx, cy, sx, sy, dot.x, dot.y) < ring.w / 2) c = INK;
-    if (Math.hypot(cx - dot.x, cy - dot.y) < dot.r) c = AMBER;
+    let c = TILE;
+    const d = Math.min(seg(u, v, 12.5, 6.5, 12.5, 19.5), arc(u, v), seg(u, v, 17.5, 24.5, 19, 24.5), seg(u, v, 8, 12.5, 18, 12.5));
+    if (d < 1.5) c = INK;
+    if (Math.hypot(u - 23, v - 12.5) < 2.6) c = GOLD;
     const i = (Math.floor(y / ss) * size + Math.floor(x / ss)) * 4;
     px[i] += c[0]; px[i + 1] += c[1]; px[i + 2] += c[2]; px[i + 3] += 255;
   }

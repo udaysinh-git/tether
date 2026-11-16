@@ -7,7 +7,7 @@
 const api = globalThis.browser ?? globalThis.chrome;
 const IS_FIREFOX = typeof globalThis.browser !== "undefined" && !!api.runtime.getBrowserInfo;
 const HAS_CDP = !!api.debugger;
-const AMBER = "#E8A33D";
+const GOLD = "#d4af37";
 const NET_MAX = 400;
 const CONSOLE_MAX = 400;
 const BODY_MAX = 2 * 1024 * 1024;
@@ -600,7 +600,7 @@ api.runtime.onStartup.addListener(async () => {
 
 function setBadge(tabId, on) {
   api.action.setBadgeText({ tabId, text: on ? " " : "" }).catch(() => {});
-  if (on) api.action.setBadgeBackgroundColor({ tabId, color: AMBER }).catch(() => {});
+  if (on) api.action.setBadgeBackgroundColor({ tabId, color: GOLD }).catch(() => {});
   api.action.setTitle({ tabId, title: on ? "Tether: this tab is shared with your agents" : "Tether" }).catch(() => {});
 }
 

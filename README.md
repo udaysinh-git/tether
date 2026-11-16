@@ -85,7 +85,7 @@ A tab becomes available to agents in one of these ways:
 4. The agent opens a tab with `open_tab`, or any tab is opened inside the agent's own window.
 5. You turn on bypass mode, which makes every tab available until you turn it off or close the browser.
 
-A shared tab gets an amber badge on the toolbar icon and a small status panel on the page with the agent's name, its latest action, **Pause** and **Stop**.
+A shared tab gets a gold badge on the toolbar icon and a small status panel on the page with the agent's name, its latest action, **Pause** and **Stop**.
 
 ![The status panel on a shared page: "Shared with Claude Code", the latest action, Pause and Stop](docs/page-pill.png)
 
@@ -102,7 +102,7 @@ An agent doesn't need you to click first. It calls `start_session` with a one-se
 
 ### Watching and stepping in
 
-The agent has a visible cursor: an amber pointer with its name moves to each element before it clicks, types or picks something, and clicks show a small ripple.
+The agent has a visible cursor: a gold pointer with its name moves to each element before it clicks, types or picks something, and clicks show a small ripple.
 
 ![The agent's cursor, labelled Claude Code, resting on a New invoice button](docs/cursor.png)
 

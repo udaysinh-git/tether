@@ -1,13 +1,15 @@
 /*
 Product:   a toolbar button that hands one browser tab at a time to a coding agent.
 Character: deliberate, consent-first, quiet.
-World:     a dim desk at night with one amber "on air" lamp. Warm graphite ramp
-           (dark because the user is light sensitive and the popup sits over pages),
-           amber means one thing only: an agent can use this.
-Moment:    the current-tab card. Unshared, it is one amber "Share this tab" button.
-           Shared, the same card shows the amber dot and the agent's latest action
+World:     charcoal and jet surfaces with one gold lamp (dark because the user is
+           light sensitive and the popup sits over pages). Palette: Charcoal
+           #1A1A1A, Jet #2D2D2D, Davy's Gray #5A5A5A, Metallic Gold #D4AF37,
+           Off White #FFFBF0. Gold means one thing only: an agent can use this.
+Moment:    the current-tab card. Unshared, it is one gold "Share this tab" button.
+           Shared, the same card shows the gold dot and the agent's latest action
            ticking ("Codex clicked “Continue” · 4s ago").
-Signature: the amber dot, used for shared state everywhere: badge, rows, page pill.
+Signature: the gold dot, used for shared state everywhere: badge, rows, page
+           pill, and the dot the "t" in the logo is tethered to.
 Concept:   the popup is the lamp switch; nothing else competes with it.
 Motion:    after Bencho's micro-interactions (bencho.dev, MIT): one spring for
            anything that settles, a quick press-in with an overshooting release,
@@ -17,18 +19,18 @@ Motion:    after Bencho's micro-interactions (bencho.dev, MIT): one spring for
 @font-face { font-family: "Jakarta Tether"; src: url("fonts/jakarta.woff2") format("woff2"); font-weight: 200 800; font-display: swap; }
 
 :root {
-  --bg: #121110;
-  --card: #1b1a18;
-  --raised: #252321;
-  --raised-hover: #2e2c29;
-  --line: rgb(236 232 225 / 0.07);
-  --text: #ece8e1;
-  --text-2: #a9a49b;
-  --text-3: #8a857c;
-  --amber: #e8a33d;
-  --amber-hover: #f0b357;
-  --amber-ink: #22180a;
-  --amber-soft: rgb(232 163 61 / 0.14);
+  --bg: #1a1a1a;
+  --card: #232323;
+  --raised: #2d2d2d;
+  --raised-hover: #363636;
+  --line: rgb(255 251 240 / 0.07);
+  --text: #fffbf0;
+  --text-2: #a9a6a0;
+  --text-3: #878580;
+  --gold: #d4af37;
+  --gold-hover: #e0bf55;
+  --gold-ink: #1a1a1a;
+  --gold-soft: rgb(212 175 55 / 0.14);
   --danger: #e0806b;
   --radius: 18px;
   --font: "Inter Tether", system-ui, "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
@@ -37,6 +39,7 @@ Motion:    after Bencho's micro-interactions (bencho.dev, MIT): one spring for
   --spring: linear(0, 0.051, 0.15, 0.264, 0.375, 0.464, 0.553, 0.63, 0.695, 0.742, 0.788, 0.826, 0.857, 0.883, 0.901, 0.919, 0.934, 0.946, 0.954, 0.963, 0.969, 0.975, 0.979, 0.983, 0.986, 0.988, 0.99, 0.992, 0.993, 0.995, 0.996, 0.996, 0.997, 0.998, 0.998, 0.998, 0.999, 0.999, 0.999, 0.999, 1); /* 380/34/0.6, 520ms */
   --settle: linear(0, 0.026, 0.085, 0.165, 0.246, 0.338, 0.429, 0.514, 0.585, 0.655, 0.718, 0.766, 0.813, 0.852, 0.885, 0.909, 0.931, 0.949, 0.963, 0.973, 0.982, 0.989, 0.993, 0.997, 0.999, 1.001, 1.002, 1.003, 1.003, 1.003, 1.003, 1.003, 1.003, 1.002, 1.002, 1.002, 1.002, 1.001, 1.001, 1.001, 1); /* 170/21.5/0.9, 650ms */
   --island: linear(0, 0.046, 0.137, 0.252, 0.377, 0.501, 0.616, 0.717, 0.804, 0.874, 0.93, 0.976, 1.005, 1.024, 1.035, 1.04, 1.041, 1.04, 1.036, 1.031, 1.026, 1.02, 1.015, 1.011, 1.008, 1.005, 1.003, 1.001, 1, 0.999, 0.999, 0.998, 0.998, 0.998, 0.999, 0.999, 0.999, 0.999, 0.999, 1, 1); /* 380/26/0.9, 540ms */
+  --pop: linear(0, 0.096, 0.292, 0.534, 0.774, 0.977, 1.137, 1.22, 1.248, 1.233, 1.188, 1.13, 1.064, 1.012, 0.973, 0.949, 0.939, 0.941, 0.951, 0.966, 0.981, 0.994, 1.005, 1.012, 1.015, 1.015, 1.013, 1.009, 1.006, 1.002, 0.999, 0.997, 0.996, 0.996, 0.997, 0.998, 0.998, 0.999, 1, 1.001, 1); /* 500/18/1 */
   --press: cubic-bezier(0.28, 1.4, 0.36, 1);
   --out: cubic-bezier(0.22, 1, 0.36, 1);
   color-scheme: dark;
@@ -57,6 +60,15 @@ html, body {
 h1, h2, h3, p { margin: 0; }
 h1 { font-family: var(--font-head); }
 
+/* The mark: a lowercase t whose crossbar points at a gold dot. On hover the
+   bar stretches out until it touches the dot and the dot is tugged in. */
+.brand { display: inline-flex; align-items: center; gap: 8px; }
+.mark { flex: none; width: 1.45em; height: 1.45em; color: var(--text); overflow: visible; }
+.mark .knot { fill: var(--gold); transform-box: fill-box; transform-origin: center; transition: translate 0.6s var(--pop), scale 0.45s var(--press); }
+.mark .bar { transform-box: fill-box; transform-origin: 0 50%; transition: scale 0.55s var(--settle); }
+.brand:hover .mark .bar { scale: 1.22 1; }
+.brand:hover .mark .knot { translate: -0.7px 0; scale: 1.12; transition-delay: 0.06s; }
+
 /* Buttons are pills. They press in quickly and come back with a little
    overshoot, the way Bencho's do. */
 button {
@@ -72,15 +84,15 @@ button {
 }
 button:hover { background: var(--raised-hover); }
 button:active:not(:disabled) { scale: 0.96; transition-duration: 0.15s, 0.15s, 0.14s, 0.09s; transition-timing-function: ease, ease, ease, ease-out; }
-button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
 button:disabled { opacity: 0.5; cursor: default; }
 
 .primary {
-  background: var(--amber);
-  color: var(--amber-ink);
+  background: var(--gold);
+  color: var(--gold-ink);
   font-weight: 600;
 }
-.primary:hover { background: var(--amber-hover); }
+.primary:hover { background: var(--gold-hover); }
 
 .quiet { background: transparent; color: var(--text-2); padding: 5px 10px; }
 .quiet:hover { background: var(--raised); color: var(--text); }
@@ -95,13 +107,13 @@ input[type="text"], input[type="number"], input[type="password"] {
   padding: 9px 12px;
   transition: border-color 0.16s, box-shadow 0.2s var(--out);
 }
-input:focus { outline: none; border-color: rgb(232 163 61 / 0.6); box-shadow: 0 0 0 4px var(--amber-soft); }
+input:focus { outline: none; border-color: rgb(212 175 55 / 0.6); box-shadow: 0 0 0 4px var(--gold-soft); }
 input::placeholder { color: var(--text-3); }
 
 a { color: var(--text-2); text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: 3px; transition: color 0.15s; }
 a:hover { color: var(--text); }
 
-.dot { position: relative; display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--amber); transition: background-color 0.2s; }
+.dot { position: relative; display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--gold); transition: background-color 0.2s; }
 .dot.off { background: var(--text-3); opacity: 0.6; }
 /* The live dot breathes out a ring, like Bencho's live beat. */
 .live-dot::after, .dot.beat::after {
@@ -144,8 +156,8 @@ a:hover { color: var(--text); }
   transition: translate 0.65s var(--settle), background-color 0.24s var(--out), scale 0.5s var(--spring);
 }
 .switch:hover::after { scale: 1.06; }
-.switch[aria-checked="true"] { background: var(--amber); }
-.switch[aria-checked="true"]::after { translate: calc(var(--w) - var(--h)) 0; background: #f6f1e9; }
+.switch[aria-checked="true"] { background: var(--gold); }
+.switch[aria-checked="true"]::after { translate: calc(var(--w) - var(--h)) 0; background: #fffbf0; }
 .switch:active:not(:disabled) { scale: 0.96; }
 
 /* toasts: the stack itself is styled by toast-stack.js */

@@ -57,7 +57,7 @@ main { padding: 0 12px 12px; display: grid; gap: 12px; grid-template-columns: mi
 
 .bypass { display: flex; gap: 12px; align-items: center; padding: 10px 8px 2px; }
 .bypass .grow { flex: 1; }
-.bypass .on { color: var(--amber); }
+.bypass .on { color: var(--gold); }
 
 .pair { display: grid; gap: 10px; }
 .pair form { display: flex; gap: 8px; }
@@ -72,7 +72,7 @@ footer { display: flex; justify-content: space-between; align-items: center; pad
 .stack:empty { display: none; }
 
 .composer { background: var(--card); border-radius: var(--radius); box-shadow: inset 0 0 0 1px var(--line); padding: 12px; display: grid; gap: 10px; transition: box-shadow 0.2s var(--out); }
-.composer.drag { box-shadow: inset 0 0 0 1px rgb(232 163 61 / 0.6), 0 0 0 4px var(--amber-soft); }
+.composer.drag { box-shadow: inset 0 0 0 1px rgb(212 175 55 / 0.6), 0 0 0 4px var(--gold-soft); }
 .composer[hidden] { display: none; }
 .composer textarea {
   width: 100%; min-height: 84px; resize: vertical;
@@ -85,7 +85,7 @@ footer { display: flex; justify-content: space-between; align-items: center; pad
 .thumbs:empty { display: none; }
 .thumb { position: relative; width: 56px; height: 56px; border-radius: 12px; overflow: hidden; background: var(--raised); }
 .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.thumb button { position: absolute; top: 3px; right: 3px; width: 20px; height: 20px; padding: 0; border-radius: 50%; background: rgb(22 21 19 / .85); font-size: 13px; line-height: 20px; }
+.thumb button { position: absolute; top: 3px; right: 3px; width: 20px; height: 20px; padding: 0; border-radius: 50%; background: rgb(26 26 26 / .85); font-size: 13px; line-height: 20px; }
 .composer .bar { display: flex; align-items: center; gap: 8px; }
 .composer .bar .grow { flex: 1; }
 .composer label.attach { color: var(--text-2); cursor: pointer; padding: 5px 10px; border-radius: 999px; font-weight: 500; transition: background-color 0.15s, color 0.15s; }
@@ -97,4 +97,4 @@ footer { display: flex; justify-content: space-between; align-items: center; pad
 .rec-dot { background: var(--danger); }
 .toggle-row { display: flex; align-items: center; gap: 10px; min-height: 32px; padding: 0 8px; }
 .toggle-row .grow { flex: 1; min-width: 0; }
-.composer textarea:focus { outline: none; border-color: rgb(232 163 61 / 0.6); box-shadow: 0 0 0 4px var(--amber-soft); }
+.composer textarea:focus { outline: none; border-color: rgb(212 175 55 / 0.6); box-shadow: 0 0 0 4px var(--gold-soft); }
