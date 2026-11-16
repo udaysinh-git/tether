@@ -60,8 +60,9 @@ await popup("ready");
 await popup("shared", async () => {
   await sw.evaluate(async (id) => {
     await share(id);
-    state.agents = ["Claude Code"];
-    state.conn = "connected";
+    // There is no host here, so hold the popup's status at "connected" for this shot.
+    Object.defineProperty(state, "conn", { get: () => "connected", set() {}, configurable: true });
+    Object.defineProperty(state, "agents", { get: () => ["Claude Code"], set() {}, configurable: true });
     state.activity.set(id, { agent: "Claude Code", summary: "clicked “New invoice”", at: Date.now() - 4000 });
     const script = (o) => ({ matches: ["*://*/*"], includes: [], excludes: [], excludeMatches: [], version: "1.0.0", ...o });
     state.scripts = [
@@ -74,6 +75,7 @@ await popup("shared", async () => {
     await startRecording(id, true);
   }, tabId);
 });
+await sw.evaluate(() => { delete state.conn; delete state.agents; state.conn = "waiting"; state.agents = []; });
 await popup("composer", null, async (p) => {
   await p.click("text=Request a change");
   await p.fill("#reqText", "Make this look like the attached screenshot: dark sidebar, bigger totals.");

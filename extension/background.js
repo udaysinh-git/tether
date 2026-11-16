@@ -502,7 +502,10 @@ async function startSession({ agent, reason, url, mode = "window" }) {
   const win = await api.windows.create({ url: url || "about:blank", focused: true, type: "normal", width: 1280, height: 860 });
   state.agentWindows.add(win.id);
   await persistWindows();
-  const tab = win.tabs?.[0] || (await api.tabs.query({ windowId: win.id }))[0];
+  // Zen and some other forks put pinned or "essential" tabs into every new
+  // window, so the first tab isn't necessarily ours: take the active one.
+  const tabs = win.tabs?.length ? win.tabs : await api.tabs.query({ windowId: win.id });
+  const tab = tabs.find((t) => t.active && !t.pinned) || tabs.find((t) => !t.pinned) || tabs.find((t) => t.active) || tabs[0];
   state.shared.set(tab.id, { by: "agent", since: Date.now() });
   await persist();
   setBadge(tab.id, true);
@@ -625,8 +628,9 @@ api.webNavigation.onCreatedNavigationTarget.addListener(async (d) => {
 
 api.tabs.onCreated.addListener(async (tab) => {
   await ready;
-  // Any tab in an agent's own window belongs to its session.
-  if (state.agentWindows.has(tab.windowId) && !state.shared.has(tab.id)) {
+  // Any tab in an agent's own window belongs to its session, except pinned
+  // ones a browser like Zen copies into every new window.
+  if (state.agentWindows.has(tab.windowId) && !tab.pinned && !state.shared.has(tab.id)) {
     state.shared.set(tab.id, { by: "agent", since: Date.now() });
     await persist();
     setBadge(tab.id, true);
