@@ -13,6 +13,7 @@ Everything the Chrome Web Store and Firefox Add-ons (AMO) ask for, ready to past
 | Category (AMO) | Web Development |
 | Language | English |
 | Homepage | https://tether.udaysinh.me |
+| Firefox listing | https://addons.mozilla.org/firefox/addon/tether/ |
 | Support | https://github.com/udaysinh-git/tether/issues |
 | Community | https://discord.gg/UcB8z8u4JP |
 | Privacy policy | https://tether.udaysinh.me/privacy/ |

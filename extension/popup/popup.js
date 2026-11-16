@@ -1,4 +1,4 @@
-import { patch, toast, liquidSwitches, rise, SPRING, sound } from "../motion.js";
+import { patch, toast, liquidSwitches, rise, SPRING, sound, setHTML } from "../motion.js";
 
 liquidSwitches();
 
@@ -276,7 +276,7 @@ const composerEl = document.getElementById("composer");
 function openComposer() {
   composer.open = true;
   composerEl.hidden = false;
-  composerEl.innerHTML = `
+  setHTML(composerEl, `
     <textarea id="reqText" placeholder="What should change? For a new look, paste or drop screenshots or mockups and say what you like about them."></textarea>
     <div class="thumbs" id="thumbs"></div>
     <div class="bar">
@@ -285,7 +285,7 @@ function openComposer() {
       <button class="quiet" data-act="cancelReq">Cancel</button>
       <button class="primary" data-act="sendReq">Send</button>
     </div>
-    <p class="faint">Sending shares this tab so your agent can try changes on it.</p>`;
+    <p class="faint">Sending shares this tab so your agent can try changes on it.</p>`);
   composerEl.animate([{ opacity: 0, transform: "translateY(8px) scale(0.98)", filter: "blur(6px)" }, { opacity: 1, transform: "none", filter: "blur(0)" }], { duration: 460, easing: SPRING });
   document.getElementById("reqText").focus();
   document.getElementById("reqFiles").addEventListener("change", (e) => addImages([...e.target.files]));
@@ -296,14 +296,14 @@ function closeComposer() {
   composer.open = false;
   composer.images = [];
   composerEl.hidden = true;
-  composerEl.innerHTML = "";
+  setHTML(composerEl, "");
   render();
 }
 
 function renderThumbs() {
-  document.getElementById("thumbs").innerHTML = composer.images
+  setHTML(document.getElementById("thumbs"), composer.images
     .map((img, i) => `<div class="thumb"><img src="${img.dataUrl}" alt="${esc(img.name)}" /><button type="button" data-act="dropImg" data-i="${i}" aria-label="Remove ${esc(img.name)}">×</button></div>`)
-    .join("");
+    .join(""));
   const last = document.getElementById("thumbs").lastElementChild;
   if (last) last.animate([{ opacity: 0, transform: "scale(0.6)" }, { opacity: 1, transform: "none" }], { duration: 520, easing: "linear(0, 0.096, 0.292, 0.534, 0.774, 0.977, 1.137, 1.22, 1.248, 1.233, 1.188, 1.13, 1.064, 1.012, 0.973, 0.949, 0.939, 0.941, 0.951, 0.966, 0.981, 0.994, 1.005, 1.012, 1.015, 1.015, 1.013, 1.009, 1.006, 1.002, 0.999, 0.997, 0.996, 0.996, 0.997, 0.998, 0.998, 0.999, 1, 1.001, 1)" });
 }

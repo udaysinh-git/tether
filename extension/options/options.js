@@ -1,4 +1,4 @@
-import { toast, liquidSwitches } from "../motion.js";
+import { toast, liquidSwitches, setHTML } from "../motion.js";
 
 liquidSwitches();
 const api = globalThis.browser ?? globalThis.chrome;
@@ -70,13 +70,13 @@ async function load() {
 
   const us = $("usStatus");
   if (st.userScripts === "ok") us.textContent = "Scripts set to run on every visit are active.";
-  else if (isFirefox) us.innerHTML = `Scripts that run on every visit need one more permission. <button id="grant">Allow user scripts</button>`;
-  else us.innerHTML = `To let scripts run on every visit, open <span class="cmd">chrome://extensions</span>, click Details on Tether and turn on “Allow user scripts”. Then <a href="#" id="recheck">check again</a>.`;
+  else if (isFirefox) setHTML(us, `Scripts that run on every visit need one more permission. <button id="grant">Allow user scripts</button>`);
+  else setHTML(us, `To let scripts run on every visit, open <span class="cmd">chrome://extensions</span>, click Details on Tether and turn on “Allow user scripts”. Then <a href="#" id="recheck">check again</a>.`);
 
   $("recValues").setAttribute("aria-checked", String(st.recordValues));
-  $("autoSites").innerHTML = autoRecord.length
+  setHTML($("autoSites"), autoRecord.length
     ? `<p class="muted" style="margin-bottom:6px">Always recorded:</p>` + autoRecord.map((h) => `<div class="script line" style="align-items:center"><p class="grow">${esc(h)}</p><button class="quiet" data-host="${esc(h)}">Stop</button></div>`).join("")
-    : `<p class="muted">No site is recorded automatically. Turn it on per site from the popup.</p>`;
+    : `<p class="muted">No site is recorded automatically. Turn it on per site from the popup.</p>`);
 
   try { gallery = (await rpc("galleryIndex")) || {}; } catch { gallery = {}; }
   const bySite = new Map();
@@ -87,15 +87,15 @@ async function load() {
       bySite.get(site).push(itemRow(kind, s));
     }
   }
-  $("gallery").innerHTML = bySite.size
+  setHTML($("gallery"), bySite.size
     ? [...bySite].sort((a, b) => (a[0] === "Every site") - (b[0] === "Every site") || a[0].localeCompare(b[0])).map(([site, rows]) => `<h3 class="site">${esc(site)}</h3>${rows.join("")}`).join("")
-    : `<p class="muted">Nothing yet. Open a site, click Tether and choose “Request a change”, or ask your agent for a script.</p>`;
+    : `<p class="muted">Nothing yet. Open a site, click Tether and choose “Request a change”, or ask your agent for a script.</p>`);
   for (const img of document.querySelectorAll("img[data-shot]")) {
     rpc("galleryImage", { kind: img.dataset.kind, id: img.dataset.shot, which: img.dataset.which }).then((r) => { if (r?.dataUrl) img.src = r.dataUrl; }, () => {});
   }
 
   const ws = st.allWatchers || [];
-  $("watchers").innerHTML = ws.length
+  setHTML($("watchers"), ws.length
     ? ws.map((w) => `<div class="script line" style="align-items:center">
         <div class="grow">
           <p class="name">${esc(w.name)}</p>
@@ -106,7 +106,7 @@ async function load() {
         <button class="quiet" data-watch-del="${esc(w.id)}">Delete</button>
         <button class="switch" role="switch" aria-checked="${w.enabled}" aria-label="${esc(w.name)}" data-watch="${esc(w.id)}"></button>
       </div>`).join("")
-    : `<p class="muted">No watchers. Ask your agent, for example “tell me when the price on this page drops below 2000”.</p>`;
+    : `<p class="muted">No watchers. Ask your agent, for example “tell me when the price on this page drops below 2000”.</p>`);
 
   try {
     const hs = await rpc("getSettings");
@@ -210,7 +210,7 @@ document.addEventListener("click", async (e) => {
     t.disabled = true;
     try {
       const g = await rpc("publishGist", { kind: t.dataset.kind, id: t.dataset.publish });
-      $("publishResult").innerHTML = `Published. Install link: <a href="${esc(g.raw)}" target="_blank" rel="noopener">${esc(g.raw)}</a>`;
+      setHTML($("publishResult"), `Published. Install link: <a href="${esc(g.raw)}" target="_blank" rel="noopener">${esc(g.raw)}</a>`);
     } catch (err) {
       $("publishResult").textContent = err.message;
     }

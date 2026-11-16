@@ -60,14 +60,20 @@ function patchChildren(from, to, changed) {
   for (; i < a.length; i++) a[i].remove();
 }
 
+// Parse markup with DOMParser and put the nodes in place, instead of
+// assigning innerHTML. Every dynamic value in our markup is escaped first.
+export function setHTML(el, html) {
+  const doc = new DOMParser().parseFromString(`<!doctype html><body>${html}`, "text/html");
+  el.replaceChildren(...doc.body.childNodes);
+}
+
 // Replace `root`'s contents with `html`, animating what changed.
 export function patch(root, html) {
   const morphs = [...root.querySelectorAll("[data-morph]")].map((el) => [el.dataset.morph, el.getBoundingClientRect().height]);
-  const tpl = document.createElement("template");
-  tpl.innerHTML = html;
+  const next = new DOMParser().parseFromString(`<!doctype html><body>${html}`, "text/html").body;
   const first = !root.firstChild;
   const changed = { text: new Set(), added: [] };
-  patchChildren(root, tpl.content, changed);
+  patchChildren(root, next, changed);
   if (first || reduce.matches) return;
 
   // Cards that changed size grow or shrink on the spring instead of jumping.

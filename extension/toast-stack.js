@@ -50,6 +50,8 @@
     .tst button:focus-visible { outline: 2px solid #d4af37; outline-offset: 1px; }
     @media (prefers-reduced-motion: reduce) { .tst-toast, .tst-toast > * { transition: none !important; } }
   `;
+  // Markup goes in through DOMParser rather than innerHTML; values are escaped.
+  const setHTML = (el, html) => el.replaceChildren(...new DOMParser().parseFromString(`<!doctype html><body>${html}`, "text/html").body.childNodes);
   const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
   function createToastStack(host, { duration = 4200, keep = false } = {}) {
@@ -97,7 +99,7 @@
       const el = document.createElement("div");
       el.className = "tst-toast";
       el.dataset.kind = kind;
-      el.innerHTML = `<span class="tst-icon"><svg viewBox="0 0 24 24">${ICONS[kind] || ICONS.info}</svg></span><span class="tst-text"><b>${esc(title)}</b><span>${esc(body)}</span></span>${action ? `<button type="button" class="tst-act">${esc(action)}</button>` : ""}<button type="button" class="tst-x" aria-label="Dismiss"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>`;
+      setHTML(el, `<span class="tst-icon"><svg viewBox="0 0 24 24">${ICONS[kind] || ICONS.info}</svg></span><span class="tst-text"><b>${esc(title)}</b><span>${esc(body)}</span></span>${action ? `<button type="button" class="tst-act">${esc(action)}</button>` : ""}<button type="button" class="tst-x" aria-label="Dismiss"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>`);
       const t = { el, leaving: false, timer: 0 };
       // Rise in from below the front, then spring to place.
       el.style.transition = "none";
@@ -117,7 +119,7 @@
 
     function update(t, { kind, title, body, action } = {}) {
       if (kind) t.el.dataset.kind = kind;
-      if (kind) t.el.querySelector(".tst-icon").innerHTML = `<svg viewBox="0 0 24 24">${ICONS[kind] || ICONS.info}</svg>`;
+      if (kind) setHTML(t.el.querySelector(".tst-icon"), `<svg viewBox="0 0 24 24">${ICONS[kind] || ICONS.info}</svg>`);
       if (title != null) t.el.querySelector(".tst-text b").textContent = title;
       if (body != null) t.el.querySelector(".tst-text span").textContent = body;
       if (action === null) t.el.querySelector(".tst-act")?.remove();
