@@ -76,6 +76,21 @@ const ctx = await chromium.launchPersistentContext(path.join(home, "profile"), {
 });
 let [sw] = ctx.serviceWorkers();
 if (!sw) sw = await ctx.waitForEvent("serviceworker");
+// Allow user scripts for Tether, as a user does once on its Details page;
+// run_js uses that API when the debugger is off.
+{
+  const id = new URL(sw.url()).host;
+  const pg = await ctx.newPage();
+  await pg.goto(`chrome://extensions/?id=${id}`);
+  await pg.waitForTimeout(600);
+  await pg.evaluate(() => {
+    const row = document.querySelector("extensions-manager")?.shadowRoot?.querySelector("extensions-detail-view")?.shadowRoot?.querySelector("#allow-user-scripts");
+    const t = row?.shadowRoot?.querySelector("cr-toggle");
+    if (t && !t.checked) t.click();
+  });
+  await pg.waitForTimeout(300);
+  await pg.close();
+}
 // TRUSTED=0 exercises the path Firefox uses: synthetic events, webRequest, page-world console hook.
 const TRUSTED = process.env.TRUSTED !== "0" && !process.argv.includes("--fallback");
 await sw.evaluate(async ({ key, port, trusted }) => { await chrome.storage.local.set({ key, port, trusted }); await refreshStandby(); }, { key, port: PORT, trusted: TRUSTED });

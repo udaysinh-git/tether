@@ -1629,70 +1629,39 @@ async function screenshot(tabId) {
   }
 }
 
-// Runs code in the page's own world. Chromium with the debugger ignores CSP;
-// otherwise the userScripts API, then a plain MAIN-world eval.
+// Runs code in the page's own world. Chromium uses the debugger (it ignores
+// the page's CSP); otherwise the browser's userScripts API, which exists for
+// running code the user supplies. There is no eval fallback: without either,
+// the user is asked to allow user scripts once.
+const NEEDS_USER_SCRIPTS = "Running JavaScript needs user scripts allowed once. Firefox: open Tether settings and press Allow user scripts. Chrome: turn on Real input in Tether settings, or Allow user scripts on Tether's Details page in chrome://extensions.";
 async function runJs(tabId, code) {
+  // Tabs Tether opened itself, like a watcher's background tab, may not be
+  // on the debugger yet.
+  if (!state.cdp.has(tabId)) await attachCdp(tabId);
   if (state.cdp.has(tabId)) {
-    const r = await cdp(tabId, "Runtime.evaluate", { expression: code, awaitPromise: true, returnByValue: true, replMode: true, userGesture: true, allowUnsafeEvalBlockedByCSP: true });
-    if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description || r.exceptionDetails.text);
-    return r.result.value;
-  }
-  if (api.userScripts?.execute) {
-    try {
-      const [r] = await api.userScripts.execute({ target: { tabId }, world: "MAIN", js: [{ code }], injectImmediately: true });
-      if (r?.error) throw new Error(String(r.error));
-      return r?.result;
-    } catch (e) {
-      if (!/not (available|enabled)|permission/i.test(e.message)) throw e;
+    // Take a handle first: in REPL mode a promise the code evaluates to can
+    // come back unresolved, and a by-value result loses the handle to wait on.
+    let r = await cdp(tabId, "Runtime.evaluate", { expression: code, awaitPromise: true, returnByValue: false, replMode: true, userGesture: true, allowUnsafeEvalBlockedByCSP: true });
+    if (!r.exceptionDetails && r.result?.subtype === "promise" && r.result.objectId) {
+      r = await cdp(tabId, "Runtime.awaitPromise", { promiseObjectId: r.result.objectId, returnByValue: false });
     }
+    if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description || r.exceptionDetails.text);
+    if (r.result?.objectId) {
+      const v = await cdp(tabId, "Runtime.callFunctionOn", { objectId: r.result.objectId, functionDeclaration: "function () { return this; }", returnByValue: true });
+      return v.result?.value;
+    }
+    return r.result?.value;
   }
-  const [r] = await api.scripting.executeScript({
-    target: { tabId },
-    world: "MAIN",
-    args: [code, Math.random().toString(36).slice(2)],
-    func: pageEval,
-  });
-  if (r?.result?.__tetherError) throw new Error(r.result.__tetherError);
-  return r?.result;
-}
-
-// Runs in the page. eval first; if the page CSP forbids eval, an inline
-// <script> (allowed on pages with 'unsafe-inline'); otherwise explain.
-function pageEval(src, token) {
-  const fail = (e) => ({ __tetherError: String(e && e.stack ? e.stack : e) });
+  if (!api.userScripts?.execute) throw new Error(NEEDS_USER_SCRIPTS);
+  let r;
   try {
-    return Promise.resolve((0, eval)(src)).catch(fail);
+    [r] = await api.userScripts.execute({ target: { tabId }, world: "MAIN", js: [{ code }], injectImmediately: true });
   } catch (e) {
-    if (!(e instanceof EvalError) && !/unsafe-eval|Content Security Policy/i.test(String(e))) return fail(e);
+    if (/not (available|enabled)|permission|userScripts/i.test(e.message)) throw new Error(NEEDS_USER_SCRIPTS);
+    throw e;
   }
-  const key = "__t" + token;
-  const attempt = (body) => {
-    let syntax = false;
-    const onErr = (ev) => { if (/SyntaxError/.test(ev.message)) syntax = true; };
-    window.addEventListener("error", onErr);
-    const s = document.createElement("script");
-    s.textContent = `window[${JSON.stringify(key)}] = (async () => { ${body} })();`;
-    (document.head || document.documentElement).appendChild(s);
-    s.remove();
-    window.removeEventListener("error", onErr);
-    const p = window[key];
-    delete window[key];
-    return { p, syntax };
-  };
-  // Try: whole code as an expression; then statements returning the last one; then as-is.
-  const trimmed = src.trim().replace(/;+$/, "");
-  const cut = Math.max(trimmed.lastIndexOf(";"), trimmed.lastIndexOf("\n"));
-  const forms = [`return (\n${src}\n);`];
-  if (cut > 0) forms.push(`${trimmed.slice(0, cut + 1)}\nreturn (\n${trimmed.slice(cut + 1)}\n);`);
-  forms.push(src);
-  let p;
-  for (const f of forms) {
-    const r = attempt(f);
-    p = r.p;
-    if (p || !r.syntax) break;
-  }
-  if (!p) return { __tetherError: "This page's security policy blocks run_js. In Chromium turn on Real input in Tether settings; in Firefox reload the tab once after sharing it, or allow user scripts in Tether settings." };
-  return p.then((v) => v, fail);
+  if (r?.error) throw new Error(String(r.error));
+  return r?.result;
 }
 
 function listNetwork(tabId, p) {

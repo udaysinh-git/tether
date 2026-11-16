@@ -370,6 +370,7 @@ The tests load the built extension into Playwright's Chromium, serve test pages,
 
 ## Known limits
 
+- Without the debugger (all of Firefox, or Chromium with Real input off), `run_js`, a script's **Run** button and tab-mode watchers use the browser's user scripts API, so allow user scripts once: in Firefox with the button in Tether's settings, in Chromium with **Allow user scripts** on Tether's Details page. Firefox needs version 153 or newer.
 - Canvas-drawn apps (Figma, Google Sheets' grid, games) have little in the outline to act on; use `screenshot` and `run_js`.
 - Network and console logs start when a tab is shared and keep the last 400 entries per tab.
 - Screenshots without the debugger, including all Firefox screenshots, bring the tab to the front first.

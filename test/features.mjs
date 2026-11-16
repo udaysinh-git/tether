@@ -75,6 +75,21 @@ const ctx = await chromium.launchPersistentContext(path.join(home, "profile"), {
 });
 let [sw] = ctx.serviceWorkers();
 if (!sw) sw = await ctx.waitForEvent("serviceworker");
+// Allow user scripts for Tether, as a user does once on its Details page;
+// run_js uses that API when the debugger is off.
+{
+  const id = new URL(sw.url()).host;
+  const pg = await ctx.newPage();
+  await pg.goto(`chrome://extensions/?id=${id}`);
+  await pg.waitForTimeout(600);
+  await pg.evaluate(() => {
+    const row = document.querySelector("extensions-manager")?.shadowRoot?.querySelector("extensions-detail-view")?.shadowRoot?.querySelector("#allow-user-scripts");
+    const t = row?.shadowRoot?.querySelector("cr-toggle");
+    if (t && !t.checked) t.click();
+  });
+  await pg.waitForTimeout(300);
+  await pg.close();
+}
 await sw.evaluate(async ({ port, trusted }) => { await chrome.storage.local.set({ key: "test-test-test-test", port, trusted }); await refreshStandby(); }, { port: PORT, trusted: TRUSTED });
 
 const tab = await ctx.newPage();

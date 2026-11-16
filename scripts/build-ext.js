@@ -33,7 +33,7 @@ const targets = {
     // ws://127.0.0.1 connection to the host into wss:// and breaks it.
     content_security_policy: { extension_pages: "script-src 'self'; object-src 'self'" },
     browser_specific_settings: {
-      gecko: { id: "tether@udaysinh.me", strict_min_version: "142.0", data_collection_permissions: { required: ["none"] } },
+      gecko: { id: "tether@udaysinh.me", strict_min_version: "153.0", data_collection_permissions: { required: ["none"] } },
     },
   },
 };
