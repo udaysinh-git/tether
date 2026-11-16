@@ -1,0 +1,22 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.udaysinh-git/tether",
+  "title": "Tether",
+  "description": "Use the Chrome or Firefox tabs you share, signed in as you: read, click, fill forms, debug.",
+  "websiteUrl": "https://tether.udaysinh.me",
+  "repository": {
+    "url": "https://github.com/udaysinh-git/tether",
+    "source": "github"
+  },
+  "version": "0.3.4",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "tether-browser",
+      "version": "0.3.4",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}
