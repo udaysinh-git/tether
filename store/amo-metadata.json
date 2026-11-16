@@ -1,0 +1,25 @@
+{
+  "version": {
+    "license": "MIT",
+    "release_notes": {
+      "en-US": "First public release. A new look with spring motion, a status panel that changes shape smoothly, stacked notifications, interface sounds you can turn off, and a fix for agent windows in browsers like Zen that add pinned tabs to new windows."
+    },
+    "approval_notes": "Tether does nothing until it is paired with its local program from the open source repository: npm install -g tether-browser, then tether setup. Source code: https://github.com/udaysinh-git/tether (build with npm install && npm run build; the Firefox build is dist/firefox). nativeMessaging is used because Firefox upgrades ws://127.0.0.1 to wss://, which cannot reach a local server. webRequestBlocking lifts Content Security Policy only on tabs the user shared."
+  },
+  "categories": [
+    "web-development"
+  ],
+  "summary": {
+    "en-US": "Let Claude Code, Codex, Cursor and any MCP agent use the browser tabs you share, signed in as you. Fill forms, debug with the network log, restyle sites. Runs on your machine, with a visible cursor you can pause."
+  },
+  "homepage": {
+    "en-US": "https://tether.udaysinh.me"
+  },
+  "support_url": {
+    "en-US": "https://github.com/udaysinh-git/tether/issues"
+  },
+  "requires_payment": false,
+  "description": {
+    "en-US": "Tether lets the coding agent you already use work in your own browser, signed in as you, on the tabs you choose.\n\nAgents like Claude Code, Codex, Cursor and Gemini CLI usually get a fresh headless browser with no logins. Tether connects them to the browser you already use instead. Nothing on a tab is visible to an agent until you click Share this tab or approve its request.\n\nWhat your agent can do in a shared tab\n• Read the page as an outline of headings, text and controls, then click, type, fill forms, choose options and upload files\n• Work inside embedded forms and payment frames\n• Read network requests with their bodies, console errors and cookies, which makes it good at debugging your own web apps while signed in\n• Save images, video and streams, and wait for downloads the site produces\n• Restyle a site or change how it behaves, saved as UserCSS or userscripts that also work in Stylus and Tampermonkey\n• Record how you use a site so later tasks start with that knowledge\n• Watch a page on a schedule and tell you when something changes\n\nYou stay in charge\n• Share one tab at a time; tabs a shared page opens come along, your other tabs stay private\n• An agent can ask for its own window in your browser, and you approve it first\n• A gold cursor with the agent's name shows every click before it happens\n• Pause holds every click and keystroke until you resume\n• When the agent reaches a CAPTCHA, a code from your phone or a payment, it hands the tab to you and waits\n\nHow it works\nTether has two parts: this extension and a small local program you install with npm (npm install -g tether-browser). Your agents talk to that program over the Model Context Protocol, and it talks to the extension. Both run on your computer. There is no Tether server and Tether collects no data.\n\nFree and open source under the MIT licence: https://github.com/udaysinh-git/tether\nSetup guide: https://tether.udaysinh.me/guide/"
+  }
+}
