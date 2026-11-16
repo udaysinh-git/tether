@@ -1,59 +1,31 @@
 # Tether
 
-Tether lets Claude Code, Codex or any other MCP client work in the browser you already use, signed in as you, on the tabs you hand it. Click the toolbar button on a tab, choose **Share this tab**, and your agent can read the page, fill forms, click through flows and watch network traffic.
+Tether lets Claude Code, Codex or any other MCP client use the browser you already use, signed in as you. You choose which tabs it gets. From there the agent can read pages, fill and submit forms, click through flows, read the network log and console, save files and media, and change how a site looks or behaves.
 
-It can also change sites for you. Send a request from the popup with a few words and a screenshot or mockup, and the agent restyles the site or writes a script for it. Styles and scripts are saved as ordinary UserCSS and userscript files, so they also work in Stylus and Tampermonkey. Turn on recording for a site and Tether keeps a log of how you use it (what you click, what you fill in, which pages and APIs are involved), which agents read later to understand the site before they touch it.
-
-It works in Chrome, Brave, Edge and other Chromium browsers, and in Firefox. Several browsers and several agents can be connected at once.
+A browser extension (Chrome, Brave, Edge and other Chromium browsers; Firefox, Zen and other Firefox forks) talks to a small local host, and every MCP agent on the machine connects to that host. Nothing on a tab is visible to an agent until you share it or approve the agent's request.
 
 <p>
   <img src="docs/popup-ready.png" width="300" alt="Tether popup before sharing: the current tab and a Share this tab button" />
-  <img src="docs/popup-shared.png" width="300" alt="Tether popup after sharing: Claude Code's latest action on the tab, a Stop sharing button, a saved script and the bypass switch" />
+  <img src="docs/popup-shared.png" width="300" alt="Tether popup with a shared tab: Claude Code's latest action, Pause and Stop sharing, a saved style, scripts, recording and bypass switches" />
 </p>
 
-## How it works
+## Contents
 
-```
-Claude Code ─┐                               ┌─ Chrome extension ── shared tabs
-Codex ───────┼─ tether (stdio) ─ HTTP ─ host ┤
-other MCP ───┘          127.0.0.1:47821      └─ Firefox extension ── shared tabs
-```
+- [Quick start](#quick-start)
+- [How it works](#how-it-works)
+- [Using it](#using-it)
+- [Changing sites](#changing-sites)
+- [Recording and site knowledge](#recording-and-site-knowledge)
+- [Watchers](#watchers)
+- [Tools](#tools)
+- [Settings](#settings)
+- [Permissions, security and privacy](#permissions-security-and-privacy)
+- [Command line](#command-line)
+- [Files Tether keeps](#files-tether-keeps)
+- [Development](#development)
+- [Known limits](#known-limits)
 
-Each agent launches `tether` as an ordinary stdio MCP server. The first one starts a small host process in the background, and every later one connects to the same host, so all agents see the same browsers. Once paired, the extension keeps a local WebSocket open to the host whenever the host is running, so an agent can ask to start a session. You can turn that off in settings, and then it only connects while something is shared or recorded. The host quits by itself after 30 minutes with nothing connected.
-
-Nothing happens on a tab you haven't shared. The agent can't list it, read it or touch it. A shared tab gets an amber badge on the toolbar button and a small pill in the corner of the page that names the agent, shows its latest action and has a Stop button.
-
-![The in-page pill: "Shared with Claude Code. Claude Code clicked New invoice", with a Stop button](docs/page-pill.png)
-
-Tabs join the session in these ways:
-
-1. You click **Share this tab**.
-2. The agent calls `start_session` and you click **Open window** or **Share tab** in the prompt (see below).
-3. A shared page opens a new tab or window (a `target="_blank"` link, `window.open`). Tabs you open yourself with Ctrl+T don't count.
-4. The agent opens one with `open_tab`, or any tab is opened inside the agent's own window.
-
-## Agent sessions
-
-An agent doesn't have to wait for you to click. When it needs the browser it calls `start_session`, and a small prompt asks you first:
-
-- **Its own window** (the default). Tether opens a new window in your browser, signed in as you, and the agent works only in that window's tabs. Your own tabs and windows stay private and keep working. The agent closes the window with `end_session`, or you close it.
-- **The tab you're on** (`mode: "current"`). For tasks about the page in front of you. It's the same as clicking Share this tab yourself.
-
-Settings has a switch to skip the prompt for the agent's own window, and one to turn session requests off.
-
-## The skill
-
-`skills/tether-browser/SKILL.md` teaches Claude Code, Codex and other agents to use Tether for browser work instead of Playwright: how to start a session, the snapshot-and-ref loop, debugging, restyling, scripts, reading recordings, and when to ask before acting. Link it into each agent's skills folder so it stays in sync with the repo:
-
-```powershell
-foreach ($d in "$env:USERPROFILE\.claude\skills", "$env:USERPROFILE\.codex\skills", "$env:USERPROFILE\.agents\skills") {
-  New-Item -ItemType Junction -Path "$d\tether-browser" -Target "E:\Projects\tether\skills\tether-browser"
-}
-```
-
-On macOS or Linux, `ln -s "$PWD/skills/tether-browser" ~/.claude/skills/` and the same for the other folders.
-
-## Setup
+## Quick start
 
 You need Node 20 or newer.
 
@@ -65,124 +37,139 @@ npm run build
 node host/cli.js setup
 ```
 
-`setup` prints the exact lines for your machine, including the pairing key. On this machine they look like:
+`setup` prints the lines that add Tether to your agents, prints your pairing key, and registers the bridge Firefox-based browsers use. Then:
 
-```sh
-# Claude Code
-claude mcp add --scope user tether -- "C:\Program Files\nodejs\node.exe" E:\Projects\tether\host\cli.js
-```
+1. Add Tether to your agent. Claude Code:
 
-```toml
-# Codex: ~/.codex/config.toml
-[mcp_servers.tether]
-command = "C:\\Program Files\\nodejs\\node.exe"
-args = ["E:\\Projects\\tether\\host\\cli.js"]
-```
+   ```sh
+   claude mcp add --scope user tether -- node /path/to/tether/host/cli.js
+   ```
 
-Any other MCP client takes the same command as a stdio server.
+   Codex, in `~/.codex/config.toml` (single quotes, so Windows backslashes stay literal):
 
-### Chrome, Brave, Edge
+   ```toml
+   [mcp_servers.tether]
+   command = 'node'
+   args = ['/path/to/tether/host/cli.js']
+   ```
 
-1. Open `chrome://extensions` (or `brave://extensions`, `edge://extensions`) and turn on Developer mode.
-2. Click **Load unpacked** and choose `dist/chrome`.
-3. Pin Tether to the toolbar, click it, and paste the pairing key.
-4. Optional: on the extension's Details page, turn on **Allow user scripts** so scripts marked `auto` run on every visit.
+   Any other MCP client runs the same command as a stdio server.
 
-### Firefox
+2. Load the extension.
 
-This covers Firefox and browsers built on it, such as Zen, LibreWolf, Floorp and Waterfox.
+   Chrome, Brave or Edge: open `chrome://extensions`, turn on Developer mode, click **Load unpacked** and pick `dist/chrome`. Click the Tether icon and paste the pairing key.
 
-1. Make sure `node host/cli.js setup` (or `node host/cli.js install-native`) has run. It registers a small bridge the browser starts through native messaging. Firefox upgrades an MV3 extension's `ws://127.0.0.1` connection to `wss://`, which can't reach the host, so Firefox talks to the bridge instead. The bridge starts the host if it isn't running and supplies the pairing key, so there's nothing to paste.
-2. Open `about:debugging#/runtime/this-firefox`, click **Load Temporary Add-on** and pick `dist/firefox/manifest.json`.
-3. The first time you share a tab, Firefox asks for access to all sites; allow it.
-4. Optional: in Tether's settings, click **Allow user scripts**.
+   Firefox, Zen, LibreWolf, Floorp or Waterfox: install a signed build (see [Keeping it installed in Firefox](#keeping-it-installed-in-firefox)), or for a quick try open `about:debugging`, choose **This Firefox**, **Load Temporary Add-on** and pick `dist/firefox/manifest.json`. No key is needed here; the bridge supplies it.
 
-Temporary add-ons are removed when the browser closes. Two ways to keep Tether installed:
+3. Install the skill so agents know when and how to use Tether (see [The skill](#the-skill)).
 
-- Sign it. Create API credentials at addons.mozilla.org (Tools, Manage API Keys), set `WEB_EXT_API_KEY` and `WEB_EXT_API_SECRET`, and run `npm run sign:firefox`. It's signed as an unlisted add-on, which only you get, and the signed `.xpi` lands in `dist/`. Install it from `about:addons`, gear menu, **Install Add-on From File**. Every signing needs a new version number in `package.json`.
-- Skip signing in browsers that allow it (Firefox Developer Edition, Nightly, and some forks): set `xpinstall.signatures.required` to `false` in `about:config`, run `npm run pack:firefox`, and install `dist/tether-firefox-<version>.xpi` the same way.
+4. Check everything with `node host/cli.js doctor`.
 
-After installing a new build, reload the extension once so it picks up new permissions.
+Open a page, click the Tether icon and choose **Share this tab**, or just ask your agent to do something in the browser and approve its request.
 
-## What the agent can do
-
-| Tool | What it does |
-| --- | --- |
-| `list_tabs` | Lists the tabs it may use, with handles like `chrome:812` |
-| `start_session`, `end_session` | Asks for its own window or your current tab; closes the window or gives the tab back |
-| `snapshot` | Reads the page as an outline of headings, text and controls, each control with a ref like `[e14]` |
-| `read_text` | Plain visible text of the page or one element |
-| `click`, `hover` | Clicks or hovers an element by ref |
-| `type`, `fill_form`, `select_option` | Types into fields, fills several at once (text, checkboxes, radios, selects) |
-| `press_key`, `scroll`, `wait_for` | Keys like `Enter` or `Control+a`, scrolling, waiting for text to appear or go away |
-| `upload_file` | Attaches files from disk to a file input, including hidden ones |
-| `navigate`, `open_tab`, `close_tab` | Moves around and manages tabs |
-| `screenshot` | Image of the visible part of a tab |
-| `run_js` | Runs JavaScript in the page's own context and returns the result |
-| `network_requests`, `network_request` | The network log since the tab was shared, then full headers and bodies for one request |
-| `console_messages` | Console output and uncaught errors |
-| `cookies` | Cookies for the current page, including httpOnly ones |
-| `get_requests`, `resolve_request` | Change requests you sent from the popup, with their images; a reply you see in the popup |
-| `apply_css`, `clear_preview` | Tries CSS on a tab without saving it |
-| `save_style`, `get_style`, `list_styles`, `delete_style` | Site styles, saved as UserCSS |
-| `save_script`, `get_script`, `run_script`, `list_scripts`, `delete_script` | Userscripts, saved in Tampermonkey's format |
-| `install_userscript` | Installs a `.user.js` or `.user.css` from a URL or pasted text |
-| `site_list`, `site_map`, `site_sessions`, `site_notes` | What Tether recorded about how you use a site, and notes agents keep about it |
-| `wait_for_user` | Hands the tab to you with a message (a CAPTCHA, a 2FA code) and continues when you press Done |
-| `list_media`, `save_media`, `video_frame` | Images, video, audio, canvases and streams on the page; saves them to disk; grabs the current video frame |
-| `wait_for_download`, `download_file`, `list_downloads` | Files the site produces, with their paths on disk |
-| `save_watcher`, `run_watcher`, `list_watchers`, `delete_watcher` | Checks a page on a schedule and notifies you |
-| `request_bypass` | Asks you for access to every tab (see below) |
-
-Every action returns a fresh snapshot, so the agent rarely needs a second call to see what changed. Content inside cross-origin iframes (payment forms, embedded forms, widgets) is part of the outline too, with refs like `[f12.e5]` that work in every tool.
-
-## Pausing
-
-Each shared page has **Pause** next to Stop, on the pill and in the popup. While a tab is paused the agent can still read it, but every click, keystroke and navigation is refused until you press **Resume**, and the agent is told to wait.
-
-It works the other way too. When the agent reaches something only you should do, like a CAPTCHA, a code from your phone, a login or a payment confirmation, it calls `wait_for_user` with a short message. The tab comes to the front, the pill shows the message with a **Done** button, and the agent carries on when you press it.
-
-## Pointing at things
-
-**Pick** in the popup lets you click any part of the page and type a note, such as "make this bigger", "watch this price" or "why is this broken?". The agent receives it like a change request: your note, the element's role, name, CSS selector, text and HTML, its outline, a screenshot cropped to the element and one of the whole page.
-
-## Media and downloads
-
-`list_media` lists what the page shows: images (including `blob:` ones the page generated), video and audio with their length and playing state, canvases, CSS background images, and HLS or DASH streams and media files seen in the network log. `save_media` saves any of them to `~/.tether/media/<site>/`. Normal files download with your cookies; `blob:` URLs and canvases are read out of the page; streams are copied into one `.mp4` with ffmpeg, if it's installed. Video that plays through MediaSource has no file behind its `blob:` URL, so save its stream instead (play it first so the stream shows up). `video_frame` returns the frame on screen.
-
-When a click downloads something (an invoice, an export), `wait_for_download` returns the file's path. `download_file` fetches a URL on a shared site with your cookies. The agent only sees downloads that started while a tab was shared, never your download history.
-
-## Watchers
-
-Ask for something like "tell me when this drops below ₹2,000" or "when the results are posted" and the agent saves a watcher. Every few minutes the browser loads the page with your cookies and a small check decides whether to tell you. Fetch mode reads the URL directly, which suits the JSON APIs the agent finds in the network log. Tab mode opens the page in a background tab for a moment, for pages built by JavaScript. Notifications arrive as a browser notification and, if you set a topic in Tether's settings, through ntfy on your phone. Watchers run while the host is running and a browser is connected. Turn them on or off in the popup or the settings page.
-
-## Bypass mode
-
-By default the agent only gets shared tabs. When a task needs more, for example comparing prices across tabs you already have open, the agent calls `request_bypass` with a reason. A small window opens in the browser with the agent's name and that reason, and nothing changes until you click **Allow**.
-
-![Bypass prompt: "Codex wants access to all your tabs", the reason, and Not now / Allow buttons](docs/prompt.png)
-
-You can also flip the switch in the popup yourself. While bypass is on, `list_tabs` shows every tab, and any tab the agent touches gets the badge and pill like a shared one. Bypass turns off when you switch it off, click **Stop everything**, or close the browser.
-
-## Changing how a site looks and works
-
-Click **Request a change** in the popup, write what you want, and paste, drop or attach images: a screenshot of a site you like, a mockup, a photo of a sketch. Sending it shares the tab. Then tell your agent to check Tether's requests. It reads the text and images with `get_requests`, tries CSS on the live tab with `apply_css`, checks the result with `screenshot`, and saves it with `save_style`. When the look needs more than CSS (moving elements, adding a button, hiding things that load late) it adds a script. It finishes with `resolve_request`, and its reply shows under the request in the popup.
-
-![The request box in the popup: a description of the change, Add images, Cancel and Send](docs/popup-composer.png)
-
-Saved styles apply on every visit to matching pages, in every connected browser. Each one has a switch in the popup and on the settings page.
-
-### Scripts
-
-Ask for something you'll repeat ("make me a script that fills this timesheet with my usual hours") and the agent saves it with `save_script`. Manual scripts get a **Run** button in the popup on matching pages. Automatic ones run on every page load once user scripts are allowed (see Setup), and each has its own switch.
-
-### Files that work elsewhere
-
-Scripts and styles are kept in the formats other managers use, one file each:
+## How it works
 
 ```
-~/.tether/scripts/fill-timesheet.user.js    userscript: Tampermonkey, Violentmonkey
-~/.tether/styles/calm-ledgerly.user.css     UserCSS: Stylus
+Claude Code ─┐                               ┌─ Chrome extension ──── shared tabs
+Codex ───────┼─ tether (stdio) ─ HTTP ─ host ┤
+other MCP ───┘          127.0.0.1:47821      └─ Firefox bridge ─ Firefox extension ── shared tabs
+```
+
+Each agent starts `tether` as an ordinary stdio MCP server. The first one starts the host in the background and later ones join it, so every agent sees the same browsers. Chromium extensions connect to the host over a local WebSocket. Firefox upgrades an extension's `ws://127.0.0.1` connection to `wss://`, which can't reach a local server, so Firefox-based browsers start a small native messaging bridge instead; the bridge also starts the host when needed and fills in the pairing key. The host quits after 30 minutes with nothing connected.
+
+A tab becomes available to agents in one of these ways:
+
+1. You click **Share this tab** in the popup.
+2. An agent calls `start_session` and you approve it.
+3. A shared page opens a new tab or window (a link with `target="_blank"`, `window.open`). Tabs you open yourself don't count.
+4. The agent opens a tab with `open_tab`, or any tab is opened inside the agent's own window.
+5. You turn on bypass mode, which makes every tab available until you turn it off or close the browser.
+
+A shared tab gets an amber badge on the toolbar icon and a small status panel on the page with the agent's name, its latest action, **Pause** and **Stop**.
+
+![The status panel on a shared page: "Shared with Claude Code", the latest action, Pause and Stop](docs/page-pill.png)
+
+## Using it
+
+### Sessions an agent starts
+
+An agent doesn't need you to click first. It calls `start_session` with a one-sentence reason, and a prompt in your browser asks you:
+
+- Its own window (the default): a new window in your browser, signed in as you. The agent works only in that window's tabs, so your own tabs stay private and keep working. `end_session` closes it, or you close it.
+- The tab you're on (`mode: "current"`): for "help me with this page".
+
+![Prompt: "Codex wants access to all your tabs", the reason, and Not now / Allow buttons](docs/prompt.png)
+
+### Watching and stepping in
+
+The agent has a visible cursor: an amber pointer with its name moves to each element before it clicks, types or picks something, and clicks show a small ripple.
+
+![The agent's cursor, labelled Claude Code, resting on a New invoice button](docs/cursor.png)
+
+**Pause** on the status panel or in the popup holds the agent. It can still read the page, but every click, keystroke and navigation is refused until you press **Resume**. When the agent reaches something only you should do, like a CAPTCHA, a code from your phone, a login or a payment confirmation, it calls `wait_for_user`. The tab comes to the front with its message and a **Done** button, and it carries on when you press it.
+
+![Status panel: "Claude Code needs you. Please type the 6-digit code from your phone, then press Done." with Done and Stop](docs/page-pill-ask.png)
+
+Drag the status panel anywhere on the page; double-click it to put it back in the corner. To keep pages clear, turn off **Show status on the page** in the popup. It then appears only when the agent needs you.
+
+### Reading and acting
+
+`snapshot` gives the agent the page as an outline: headings, text and every control, each with a ref like `[e14]`. It acts by ref with `click`, `type`, `fill_form`, `select_option`, `press_key`, `hover`, `scroll` and `upload_file`, and each action returns a fresh outline. Content inside cross-origin iframes (payment forms, embedded forms, widgets) is part of the outline, with refs like `[f12.e5]` that work in every tool.
+
+In Chromium, Tether uses the browser's debugger, so clicks and keystrokes arrive as real input, scripts run on pages with strict security policies, and the network log includes response bodies. Chromium shows a "started debugging this browser" bar while that is active. Firefox has no debugger API, so there clicks and typing are DOM events, which nearly every site accepts.
+
+### Debugging a site
+
+`network_requests` lists every request since the tab was shared, `network_request` shows one with headers and both bodies, `console_messages` returns console output and uncaught errors, and `cookies` lists the page's cookies, including httpOnly ones.
+
+### Media and downloads
+
+`list_media` lists the images (including `blob:` ones), video, audio, canvases and background images on a page, plus HLS and DASH streams and media files from the network log. `save_media` saves any of them to `~/.tether/media/<site>/` with your cookies; `blob:` URLs and canvases are read out of the page, and streams are joined into one `.mp4` with ffmpeg if it's installed. `video_frame` returns the frame a video is showing.
+
+After a click that downloads something, `wait_for_download` returns the file's path, and `download_file` fetches a URL on a shared site with your cookies. Agents only see downloads that started while a tab was shared, never your download history.
+
+### Bypass mode
+
+When a task needs tabs you already have open, the agent calls `request_bypass` with a reason and you allow or decline it in a prompt. You can also turn it on from the popup. While it's on, every tab is available and any tab the agent touches gets the badge and status panel. It turns off when you switch it off, press **Stop everything** or close the browser.
+
+### The skill
+
+`skills/tether-browser/SKILL.md` tells agents to use Tether for browser work instead of Playwright, and covers starting sessions, the outline-and-ref loop, iframes, debugging, media, watchers, restyling, scripts, reading recordings, and when to ask you first. Link it into each agent's skills folder so it stays in sync with the repo:
+
+```powershell
+foreach ($d in "$env:USERPROFILE\.claude\skills", "$env:USERPROFILE\.codex\skills", "$env:USERPROFILE\.agents\skills") {
+  New-Item -ItemType Junction -Path "$d\tether-browser" -Target "$PWD\skills\tether-browser"
+}
+```
+
+On macOS or Linux: `ln -s "$PWD/skills/tether-browser" ~/.claude/skills/`, and the same for the other folders.
+
+## Changing sites
+
+### Requests
+
+**Request a change** in the popup takes a note plus pasted, dropped or attached images: a screenshot of a site you like, a mockup, a sketch. **Pick** lets you click any part of the page and write a note about it; the agent then also gets that element's selector, text, HTML and outline, a crop of it and a screenshot of the page. Sending either one shares the tab.
+
+<p>
+  <img src="docs/popup-composer.png" width="300" alt="The request box in the popup with a description, Add images, Cancel and Send" />
+  <img src="docs/picker.png" width="460" alt="Picking an element on the page: the element outlined and a note box with Cancel and Send" />
+</p>
+
+Tell your agent to check Tether. It reads the request with `get_requests`, previews CSS on the live tab with `apply_css`, checks it with `screenshot`, saves it with `save_style`, adds a script when CSS isn't enough, and replies with `resolve_request`. The reply shows under the request in the popup.
+
+### Styles and scripts
+
+Styles apply on every visit to matching pages in every connected browser. Scripts are either manual, with a **Run** button in the popup, or automatic, running on every page load once user scripts are allowed (Chrome: **Allow user scripts** on the extension's Details page; Firefox: the button in Tether's settings). Every style and automatic script has its own switch in the popup and settings.
+
+The settings page has a gallery of everything, grouped by site, with before and after screenshots for styles. Each item can be downloaded, published as a secret GitHub Gist through the `gh` CLI (the Gist's raw link installs it in Tampermonkey or Stylus), or deleted.
+
+### Compatible with Tampermonkey and Stylus
+
+Each script is a standard userscript and each style is standard UserCSS:
+
+```
+~/.tether/scripts/fill-timesheet.user.js     works in Tampermonkey and Violentmonkey
+~/.tether/styles/hack2skill-dark.user.css    works in Stylus
 ```
 
 ```js
@@ -209,99 +196,158 @@ Scripts and styles are kept in the formats other managers use, one file each:
 })();
 ```
 
-Tether's settings page has a gallery of everything you've made, grouped by site. Styles saved while the agent had the page open come with before and after screenshots. Download any item and drop the file into Tampermonkey or Stylus, or press **Publish** to put it in a secret GitHub Gist (through the `gh` CLI) and get an install link to share. Manual scripts become a menu command in those managers instead of running on load. Every save bumps `@version`, so they notice updates, and publishing again updates the same Gist.
-
-It works the other way too. **Install** on the settings page, or the agent's `install_userscript`, takes `.user.js` and `.user.css` files from Greasy Fork, OpenUserJS, userstyles.world or anywhere else and keeps them unchanged. Tether supports `@match`, `@include`, `@exclude`, `@exclude-match` and `@run-at`, plus these `GM_` functions: `GM_addStyle`, `GM_getValue`, `GM_setValue`, `GM_deleteValue`, `GM_listValues`, `GM_xmlhttpRequest`, `GM_openInTab`, `GM_setClipboard`, `GM_notification`, `GM_registerMenuCommand`, the `GM.*` promise versions and `unsafeWindow`. UserCSS `@-moz-document` sections (`url`, `url-prefix`, `domain`, `regexp`) are matched the way Stylus matches them.
+Every save bumps `@version`, so other managers notice updates. In the other direction, **Install** on the settings page (or the agent's `install_userscript`) takes `.user.js` and `.user.css` files from Greasy Fork, OpenUserJS, userstyles.world or anywhere else and keeps them unchanged. Tether supports `@match`, `@include`, `@exclude`, `@exclude-match` and `@run-at`; `GM_addStyle`, `GM_getValue`, `GM_setValue`, `GM_deleteValue`, `GM_listValues`, `GM_xmlhttpRequest`, `GM_openInTab`, `GM_setClipboard`, `GM_notification`, `GM_registerMenuCommand`, the `GM.*` promise versions and `unsafeWindow`; and UserCSS `@-moz-document` rules (`url`, `url-prefix`, `domain`, `regexp`).
 
 Edit or delete the files directly and every connected browser picks up the change.
 
-## Recording how you use a site
+## Recording and site knowledge
 
-Click **Record** in the popup to record the current visit, or turn on **Always record on** a site to record every visit there. A coral dot in the page corner shows a recording is running. Tether records interactions and structure, not video:
+**Record** in the popup records the current visit; **Always record on** a site records every visit there. A coral dot on the page shows it's running. Tether records interactions and structure, not video:
 
-- each click, with the element's role, name, a CSS selector that finds it again, where it sits on the page and the section it's in
-- what you type and choose in fields, form submits, and Enter, Escape and shortcut keys
-- every page you open (single-page apps included) and the outline of each page as it changes
-- the site's own API calls: method, URL, status and time
+- each click, with the element's role, name, a CSS selector that finds it again, its position and the section it's in
+- what you type and choose, form submits, and Enter, Escape and shortcut keys
+- every page you open, single-page apps included, and each page's outline as it changes
+- the site's API calls: method, URL, status and timing
 
-Passwords, card numbers, one-time codes and fields that look like them are always masked. You can stop recording typed text altogether in settings. Events are saved under `~/.tether/sites/<host>/` once the host is running, and the extension holds them until then.
+Passwords, card numbers, one-time codes and fields that look like them are always masked, and settings can stop recording typed text entirely. Recordings are saved per site under `~/.tether/sites/<host>/`; the extension holds them until the host is running.
 
-Agents read it back with `site_map`, which folds every session into one summary: the site's pages, the buttons and links you actually use on each, the fields you fill, the APIs behind them and the usual paths between pages. `site_map` with a page path gives that page's full outline, and `site_sessions` replays a session step by step. Agents can write what they learn into `site_notes`, which shows at the top of the map next time.
+Agents read this back with `site_map`, which folds every session into one summary of the site's pages, the controls you actually use on each, the fields you fill, the APIs behind them and your usual paths. `site_map` with a page path gives that page's full outline, `site_sessions` replays a session step by step, and agents keep what they learn in `site_notes`, which appears at the top of the map next time.
 
-## Permissions, and why
+## Watchers
 
-The extension asks for broad permissions so pages can't stop the agent from doing what you asked. They only apply to tabs you've shared, or every tab while bypass is on.
+Ask for something like "tell me when this drops below 2,000" or "when the results are posted" and the agent saves a watcher. The browser loads the page on a schedule with your cookies, and a small check decides whether to tell you. Fetch mode reads the URL directly, which suits the JSON APIs agents find in the network log; tab mode opens the page in a background tab for pages built by JavaScript. Alerts arrive as browser notifications and, if you set a topic in settings, through ntfy on your phone. Watchers run while the host is running and a browser is connected, and each has a switch in the popup and settings.
+
+## Tools
+
+| Tool | What it does |
+| --- | --- |
+| `list_tabs` | The tabs the agent may use, with handles like `chrome:812` |
+| `start_session`, `end_session` | Ask for its own window or your current tab; close the window or give the tab back |
+| `snapshot`, `read_text` | The page as an outline with refs; plain visible text |
+| `click`, `hover`, `type`, `fill_form`, `select_option` | Act on elements by ref |
+| `press_key`, `scroll`, `wait_for` | Keys and shortcuts, scrolling, waiting for text to appear or go |
+| `upload_file` | Attach files from disk to a file input, including hidden ones |
+| `navigate`, `open_tab`, `close_tab` | Move around and manage tabs |
+| `screenshot`, `run_js` | An image of the tab; JavaScript in the page's own context |
+| `wait_for_user` | Hand the tab to you with a message and continue when you press Done |
+| `network_requests`, `network_request`, `console_messages`, `cookies` | Network log with bodies, console output, cookies |
+| `list_media`, `save_media`, `video_frame` | Media and streams on the page, saved to disk; the current video frame |
+| `wait_for_download`, `download_file`, `list_downloads` | Files the site produces, with their paths |
+| `get_requests`, `resolve_request` | Your change requests and picked elements; a reply in the popup |
+| `apply_css`, `clear_preview` | Preview CSS without saving |
+| `save_style`, `get_style`, `list_styles`, `delete_style` | Site styles as UserCSS |
+| `save_script`, `get_script`, `run_script`, `list_scripts`, `delete_script` | Userscripts in Tampermonkey's format |
+| `install_userscript` | Install a `.user.js` or `.user.css` from a URL or text |
+| `site_list`, `site_map`, `site_sessions`, `site_notes` | Recordings and notes about how you use a site |
+| `save_watcher`, `run_watcher`, `list_watchers`, `delete_watcher` | Scheduled checks that notify you |
+| `request_bypass` | Ask for access to every tab |
+
+## Settings
+
+Tether's settings page (popup, then **Settings**) has:
+
+- Connection: pairing key and port (Chromium only; Firefox doesn't need them).
+- Agent sessions: let agents ask to start a session; ask before an agent opens its own window; show the agent's cursor; show the status panel on pages.
+- Real input (Chromium): use the debugger for clicks, typing and network capture.
+- Recording: record what you type; sites recorded automatically.
+- Gallery: every style and script by site, with switches, Download, Publish and Delete.
+- Watchers: switches, Check now and Delete.
+- Notifications and publishing: ntfy topic and server, GitHub account for Gists.
+- Install: add a `.user.js` or `.user.css` file.
+
+### Keeping it installed in Firefox
+
+Temporary add-ons disappear when the browser closes. To keep Tether:
+
+- Sign it as an unlisted add-on, which only you receive. Create API credentials at addons.mozilla.org (Tools, Manage API Keys), set `WEB_EXT_API_KEY` and `WEB_EXT_API_SECRET`, bump `version` in `package.json` and run `npm run sign:firefox`. Install the `.xpi` from `dist/` through `about:addons`, the gear menu, **Install Add-on From File**. Later versions install over it and keep your settings.
+- Or, in browsers that allow unsigned add-ons (Firefox Developer Edition, Nightly and some forks), set `xpinstall.signatures.required` to `false` in `about:config`, run `npm run pack:firefox` and install `dist/tether-firefox-<version>.xpi` the same way.
+
+## Permissions, security and privacy
+
+The extension asks for broad permissions so pages can't stop the agent from doing what you asked. They only apply to tabs you've shared or approved, or every tab while bypass mode is on.
 
 | Permission | Used for |
 | --- | --- |
-| Access to all sites | Reading and acting on whatever site you share |
-| `debugger` (Chromium) | Clicks and keystrokes the page can't tell apart from yours, `run_js` past strict Content Security Policies, network capture with response bodies, console capture |
-| `webRequest` | Network log; in Firefox also response bodies for fetch/XHR, and removing CSP headers on shared tabs so `run_js` works there |
-| `scripting`, `userScripts` | The page outline and actions; saved scripts |
-| `cookies` | The `cookies` tool |
-| `nativeMessaging` (Firefox) | Talking to the Tether bridge, which the browser starts |
-| `downloads` | Telling the agent where a file it triggered was saved |
-| `notifications` | Watcher alerts |
-| `tabs`, `webNavigation`, `storage`, `alarms` | Tracking shared tabs and the tabs they open; reconnecting after the browser puts the extension to sleep |
+| Access to all sites | Reading and acting on whatever you share |
+| `debugger` (Chromium) | Real clicks and keys, scripts on strict-CSP pages, network bodies, console |
+| `webRequest` | Network log; in Firefox also fetch/XHR bodies and lifting CSP on shared tabs |
+| `scripting`, `userScripts` | The outline and actions; saved scripts |
+| `cookies`, `downloads`, `notifications` | The cookies tool; download paths; watcher alerts |
+| `nativeMessaging` (Firefox) | The bridge the browser starts |
+| `tabs`, `webNavigation`, `storage`, `alarms` | Tracking shared tabs and reconnecting after the browser suspends the extension |
 
-While the debugger is attached, Chromium shows a "Tether started debugging this browser" bar. That bar is the browser's own notice and the extension can't hide it. If you click Cancel on it, Tether stops using the debugger for that tab and falls back to ordinary DOM events. You can also turn it off for good under **Real input** in Tether's settings.
+Security:
 
-Firefox has no debugger API, so there clicks and typing are DOM events. Most sites accept them; a few that check `event.isTrusted` won't. For `run_js` on a strict-CSP page in Firefox, reload the tab once after sharing it.
-
-## What sites can see
-
-Tether keeps a small footprint in the page. The pill lives in a closed shadow root, the outline code runs in the extension's isolated world, and nothing is added to the page's own JavaScript globals unless you or the agent run a script there. With real input on, clicks and keys look the same to the page as yours.
-
-Tether doesn't spoof fingerprints or try to defeat bot detection. Agent-paced browsing can still look automated to sites that watch behaviour, and some sites' terms forbid automation. That's between you and the site.
-
-## Security
-
-- The host listens on `127.0.0.1` only. It refuses HTTP requests that carry an `Origin` header or the wrong `Host`, so web pages can't reach it, even through DNS rebinding.
-- Agents and the extension both need the pairing key in `~/.tether/config.json`. `tether key --new` makes a new one; paste it into the extension again afterwards.
-- The host only accepts WebSocket connections from browser-extension origins, and the extension never takes commands from web pages.
+- The host listens on `127.0.0.1` only and refuses HTTP requests with an `Origin` header or an unexpected `Host`, so web pages can't reach it, including through DNS rebinding.
+- Agents and Chromium extensions need the pairing key from `~/.tether/config.json`; `tether key --new` replaces it. Firefox's bridge reads it locally.
+- The host accepts WebSocket connections only from browser-extension origins, and the extension never takes commands from web pages.
 - Anyone who can run programs as your user can read the key and drive shared tabs. Treat sharing a tab like handing someone your mouse.
+- Agents are told to ask before paying, sending messages or deleting things. That is an instruction to the model, not something Tether enforces, so watch the status panel when it matters.
 
-Agents are told to ask before paying, sending messages or deleting things, but that's an instruction to the model, not something Tether enforces. Watch the pill when it matters.
+What sites can see: the status panel and cursor live in a closed shadow root, the outline code runs in the extension's isolated world, and nothing is added to the page's own JavaScript unless a script is run there. Tether doesn't spoof fingerprints or try to defeat bot detection; agent-paced browsing can still look automated, and some sites' terms forbid automation.
 
-## Commands
+## Command line
+
+`npm link` puts `tether` on your PATH; otherwise use `node host/cli.js`.
 
 ```sh
-node host/cli.js            # stdio MCP server (what agents run)
-node host/cli.js serve      # host in the foreground with logs
-node host/cli.js status     # browsers, agents and tab count
-node host/cli.js key        # print the pairing key
-node host/cli.js key --new  # rotate it
-node host/cli.js setup      # config lines for Claude Code and Codex, and registers the Firefox bridge
-node host/cli.js doctor     # checks every piece and says what to fix
+tether               # stdio MCP server (what agents run)
+tether serve         # host in the foreground with logs
+tether status        # connected browsers, agents and shared tabs
+tether doctor        # checks every piece of the setup and says what to fix
+tether setup         # agent config lines, pairing key, Firefox bridge registration
+tether key           # print the pairing key
+tether key --new     # replace it
+tether install-native [--chrome-id <id>]   # register the bridge again
 ```
 
-`npm link` puts `tether` on your PATH if you'd rather type that. Host logs go to `~/.tether/host.log` when an agent starts it.
+## Files Tether keeps
+
+```
+~/.tether/
+  config.json        port, pairing key, ntfy topic, Gist account
+  host.log           host log when an agent or the bridge started it
+  scripts/           userscripts (.user.js)
+  styles/            UserCSS (.user.css)
+  gallery/           before and after screenshots, Gist links
+  sites/<host>/      recordings, page outlines and notes per site
+  requests/          change requests and their images
+  watchers/          watcher definitions and last results
+  media/<site>/      files saved with save_media
+  native/            the Firefox bridge launcher and manifest
+```
 
 ## Development
 
 ```
-host/        MCP host: cli.js, shim.js (stdio bridge for agents), native.js (native messaging bridge
-             for Firefox), install-native.js, daemon.js (HTTP + WebSocket), hub.js, tools.js,
-             scripts.js (userscript + UserCSS files), sites.js (recordings, site map), requests.js
-extension/   background.js, content.js (outline, actions, pill), popup/, options/, prompt/ (bypass window)
-scripts/     build-ext.js writes dist/chrome and dist/firefox; make-icons.js draws the icons
-test/        e2e.mjs (Chromium + extension + MCP client), shots.mjs (UI screenshots)
+host/        cli.js, shim.js (stdio bridge for agents), daemon.js (HTTP + WebSocket), hub.js,
+             tools.js, native.js and install-native.js (Firefox bridge), scripts.js (userscript and
+             UserCSS files), sites.js (recordings), requests.js, media.js, watchers.js, gallery.js,
+             doctor.js, config.js
+extension/   background.js, content.js (outline, actions, cursor, status panel, recorder, picker),
+             popup/, options/, prompt/
+scripts/     build-ext.js (dist/chrome, dist/firefox), make-icons.js
+skills/      tether-browser, the agent skill
+test/        e2e.mjs, features.mjs, shots.mjs
 ```
 
 ```sh
-npm run build   # after any change in extension/
-npm test        # end-to-end, once with the debugger and once without
-npm run shots   # screenshots of the popup, pill, prompt and settings into test/shots
+npm run build           # after any change in extension/
+npm test                # both end-to-end suites, with and without the debugger
+npm run shots           # screenshots of the popup, page UI and settings into test/shots
+npm run pack:firefox    # unsigned .xpi
+npm run sign:firefox    # signed unlisted .xpi (needs the AMO API key)
+npm run doctor
 ```
 
-The end-to-end test loads the built extension into Playwright's Chromium, serves a test page, connects an MCP client through the stdio shim and checks sharing, the outline, form filling, trusted clicks, network and console capture, saved and imported userscripts, CSS previews and saved styles, recording and the site map, change requests with images, agent windows and current-tab sessions, bypass and stopping. `test/features.mjs` covers pausing, downloads, cross-origin iframes, media, picked elements, watchers, gallery screenshots and sharing that survives a reload. `--fallback` runs either one again without the debugger, which is the same code path Firefox uses. Firefox itself is checked with `npx web-ext lint -s dist/firefox`, not driven end to end.
+The tests load the built extension into Playwright's Chromium, serve test pages, connect an MCP client through the stdio shim and drive every tool: sharing, the outline, forms, real clicks, network and console capture, sessions, bypass, pausing, cross-origin iframes, media, downloads, picked elements, requests, styles and scripts, recording and the site map, watchers, gallery screenshots and sharing that survives an extension reload. `--fallback` repeats a suite without the debugger, which is the path Firefox takes. Firefox itself is checked with `npx web-ext lint -s dist/firefox`.
 
 ## Known limits
 
-- Canvas apps (Figma, Google Sheets' grid, games) have little in the outline to act on. Use `screenshot` and `run_js`.
+- Canvas-drawn apps (Figma, Google Sheets' grid, games) have little in the outline to act on; use `screenshot` and `run_js`.
 - Network and console logs start when a tab is shared and keep the last 400 entries per tab.
 - Screenshots without the debugger, including all Firefox screenshots, bring the tab to the front first.
-- Imported userscripts: `@require` and `@resource` aren't loaded. `GM_xmlhttpRequest` uses the page's `fetch`, so cross-site calls are subject to CORS, unlike in Tampermonkey. `GM_setValue` stores values in the site's localStorage, so a script's values aren't shared across sites.
-- Imported UserCSS that uses `@var` settings or a preprocessor (Stylus, Less) isn't supported.
-- The `.user.js` and `.user.css` formats follow what Tampermonkey and Stylus document. The tests check Tether's side; installing into those extensions hasn't been tested yet.
+- Imported userscripts: `@require` and `@resource` aren't loaded, `GM_xmlhttpRequest` uses the page's `fetch` and so is subject to CORS, and `GM_setValue` values are stored per site.
+- Imported UserCSS that uses `@var` settings or a preprocessor isn't supported.
+- Tab-mode watchers load the URL directly, so pages that only work when reached by clicking through a single-page app can show an error page; point the watcher at a URL that loads on its own.
 - An agent only sees a change request when it calls `get_requests`, so tell yours to check after you send one.
