@@ -9,6 +9,8 @@ A browser extension (Chrome, Brave, Edge and other Chromium browsers; Firefox, Z
   <img src="docs/popup-shared.png" width="300" alt="Tether popup with a shared tab: Claude Code's latest action, Pause and Stop sharing, a saved style, scripts, recording and bypass switches" />
 </p>
 
+Website: [tether.udaysinh.me](https://tether.udaysinh.me). Ideas, feedback and early builds: [the Tether Discord](https://discord.gg/DZNXsCySDD).
+
 ## Contents
 
 - [Quick start](#quick-start)
