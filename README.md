@@ -4,6 +4,8 @@
 
 <p align="center"><a href="https://tether.udaysinh.me">Website</a> · <a href="https://tether.udaysinh.me/guide/">Guide</a> · <a href="https://discord.gg/UcB8z8u4JP">Discord</a> · <a href="LICENSE">MIT licence</a></p>
 
+<p align="center"><a href="https://tether.udaysinh.me/#watch"><img src="docs/demo.gif" width="860" alt="Demo: Claude Code pays an overdue invoice in a signed-in web app through Tether, hands the tab over for a phone code, then gives the app a dark theme and saves it" /></a></p>
+
 Tether lets Claude Code, Codex or any other MCP client use the browser you already use, signed in as you. You choose which tabs it gets. From there the agent can read pages, fill and submit forms, click through flows, read the network log and console, save files and media, and change how a site looks or behaves.
 
 A browser extension (Chrome, Brave, Edge and other Chromium browsers; Firefox, Zen and other Firefox forks) talks to a small local host, and every MCP agent on the machine connects to that host. Nothing on a tab is visible to an agent until you share it or approve the agent's request.

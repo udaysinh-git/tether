@@ -2,3 +2,5 @@ node_modules/
 dist/
 *.log
 test/shots/
+demo/out/
+demo/audio/assets/
