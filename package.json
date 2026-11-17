@@ -11,7 +11,7 @@
     "icons": "node scripts/make-icons.js",
     "shots": "node scripts/build-ext.js && node test/shots.mjs",
     "pack:firefox": "node scripts/build-ext.js && npx --yes web-ext@8 build -s dist/firefox -a dist --overwrite-dest -n tether-firefox-{version}.xpi",
-    "sign:firefox": "node scripts/build-ext.js && npx --yes web-ext@8 sign -s dist/firefox -a dist --channel unlisted",
+    "sign:firefox": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/sign-firefox.ps1",
     "doctor": "node host/cli.js doctor"
   },
   "license": "MIT",
