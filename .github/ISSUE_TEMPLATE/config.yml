@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Questions and ideas
+    url: https://github.com/udaysinh-git/tether/discussions
+    about: Ask how to do something, or share what you built with Tether.
+  - name: Discord
+    url: https://discord.gg/UcB8z8u4JP
+    about: Chat with other people using Tether.

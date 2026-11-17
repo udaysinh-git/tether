@@ -1,0 +1,33 @@
+name: Bug report
+description: Something in Tether doesn't work as it should
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: input
+    id: browser
+    attributes:
+      label: Browser and version
+      placeholder: Chrome 142, Zen 1.17, Firefox 153...
+    validations:
+      required: true
+  - type: input
+    id: agent
+    attributes:
+      label: Agent
+      placeholder: Claude Code, Codex, OpenCode, Cursor...
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `tether doctor`
+      render: text
+  - type: input
+    id: site
+    attributes:
+      label: Site, if it only happens on one
+      description: Leave out anything private.
