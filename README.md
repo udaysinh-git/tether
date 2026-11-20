@@ -2,9 +2,28 @@
 
 <h1 align="center">Tether</h1>
 
-<p align="center"><a href="https://chromewebstore.google.com/detail/tether/bdkhlojbkkldeehiolelnmnpaanjdncc">Chrome Web Store</a> · <a href="https://addons.mozilla.org/firefox/addon/tether/">Firefox Add-ons</a> · <a href="https://www.npmjs.com/package/tether-browser">npm</a></p>
+<p align="center">
+  <a href="https://chromewebstore.google.com/detail/tether/bdkhlojbkkldeehiolelnmnpaanjdncc"><img src="docs/chrome-web-store.png" height="58" alt="Available in the Chrome Web Store" /></a>
+  &nbsp;
+  <a href="https://addons.mozilla.org/firefox/addon/tether/"><img src="docs/firefox-add-ons.svg" height="58" alt="Get the add-on for Firefox" /></a>
+</p>
 
-<p align="center"><a href="https://tether.udaysinh.me">Website</a> · <a href="https://tether.udaysinh.me/guide/">Guide</a> · <a href="https://discord.gg/UcB8z8u4JP">Discord</a> · <a href="LICENSE">MIT licence</a></p>
+<p align="center">
+  <a href="https://chromewebstore.google.com/detail/tether/bdkhlojbkkldeehiolelnmnpaanjdncc"><img src="https://img.shields.io/chrome-web-store/v/bdkhlojbkkldeehiolelnmnpaanjdncc?label=Chrome%20Web%20Store&logo=googlechrome&labelColor=1a1a1a&color=d4af37&logoColor=white" alt="Chrome Web Store version" /></a>
+  <a href="https://addons.mozilla.org/firefox/addon/tether/"><img src="https://img.shields.io/amo/v/tether?label=Firefox%20Add-ons&logo=firefoxbrowser&labelColor=1a1a1a&color=d4af37&logoColor=white" alt="Firefox Add-ons version" /></a>
+  <a href="https://www.npmjs.com/package/tether-browser"><img src="https://img.shields.io/npm/v/tether-browser?logo=npm&labelColor=1a1a1a&color=d4af37&logoColor=white" alt="npm version" /></a>
+  <a href="https://www.npmjs.com/package/tether-browser"><img src="https://img.shields.io/npm/dm/tether-browser?label=downloads&logo=npm&labelColor=1a1a1a&color=d4af37&logoColor=white" alt="npm downloads per month" /></a>
+  <a href="https://registry.modelcontextprotocol.io/v0/servers?search=io.github.udaysinh-git/tether"><img src="https://img.shields.io/badge/MCP%20Registry-listed-d4af37?logo=modelcontextprotocol&labelColor=1a1a1a&color=d4af37&logoColor=white" alt="Listed in the official MCP Registry" /></a>
+  <br />
+  <a href="https://github.com/udaysinh-git/tether/releases/latest"><img src="https://img.shields.io/github/v/release/udaysinh-git/tether?label=release&logo=github&labelColor=1a1a1a&color=d4af37&logoColor=white" alt="Latest GitHub release" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/udaysinh-git/tether?label=licence&labelColor=1a1a1a&color=d4af37&logoColor=white" alt="MIT licence" /></a>
+  <a href="https://www.npmjs.com/package/tether-browser"><img src="https://img.shields.io/node/v/tether-browser?logo=nodedotjs&labelColor=1a1a1a&color=d4af37&logoColor=white" alt="Node 20 or newer" /></a>
+  <a href="https://github.com/udaysinh-git/tether#development"><img src="https://img.shields.io/badge/tests-7%20suites%2C%20all%2053%20tools-d4af37?logo=playwright&labelColor=1a1a1a&color=d4af37&logoColor=white" alt="End-to-end tests cover all 53 tools" /></a>
+</p>
+
+<p align="center"><a href="https://glama.ai/mcp/servers/udaysinh-git/tether"><img src="https://glama.ai/mcp/servers/udaysinh-git/tether/badge" width="380" alt="Tether on Glama: security, licence and quality scores" /></a></p>
+
+<p align="center"><a href="https://tether.udaysinh.me">Website</a> · <a href="https://tether.udaysinh.me/guide/">Guide</a> · <a href="https://discord.gg/UcB8z8u4JP">Discord</a></p>
 
 <p align="center"><a href="https://tether.udaysinh.me/#watch"><img src="docs/demo.gif" width="860" alt="Demo: Claude Code pays an overdue invoice in a signed-in web app through Tether, hands the tab over for a phone code, then gives the app a dark theme and saves it" /></a></p>
 
