@@ -75,7 +75,7 @@ switch (cmd) {
     console.log("Any other MCP client: run this as a stdio server:");
     console.log(`  ${q(node)} ${q(CLI)}\n`);
     console.log(`Pairing key for Chrome, Brave and Edge: ${loadConfig().key}\n`);
-    console.log("Get the extension: https://github.com/udaysinh-git/tether/releases/latest\n");
+    console.log("Get the extension:\n  Chrome, Brave, Edge: https://chromewebstore.google.com/detail/tether/bdkhlojbkkldeehiolelnmnpaanjdncc\n  Firefox, Zen: https://addons.mozilla.org/firefox/addon/tether/\n");
     const { installNative } = await import("./install-native.js");
     installNative();
     break;

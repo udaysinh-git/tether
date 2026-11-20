@@ -23,7 +23,7 @@ export async function doctor() {
   // extension/ folder, and the extension comes from the release instead)
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
   const fromSource = fs.existsSync(path.join(ROOT, "extension"));
-  if (!fromSource) check(true, `Installed from npm (v${pkg.version}); get the extension from https://github.com/udaysinh-git/tether/releases/latest`);
+  if (!fromSource) check(true, `Installed from npm (v${pkg.version}); get the extension from the Chrome Web Store (https://chromewebstore.google.com/detail/tether/bdkhlojbkkldeehiolelnmnpaanjdncc) or Firefox Add-ons (https://addons.mozilla.org/firefox/addon/tether/)`);
   for (const b of fromSource ? ["chrome", "firefox"] : []) {
     const m = path.join(ROOT, "dist", b, "manifest.json");
     const built = fs.existsSync(m);

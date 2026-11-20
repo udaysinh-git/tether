@@ -2,6 +2,8 @@
 
 <h1 align="center">Tether</h1>
 
+<p align="center"><a href="https://chromewebstore.google.com/detail/tether/bdkhlojbkkldeehiolelnmnpaanjdncc">Chrome Web Store</a> · <a href="https://addons.mozilla.org/firefox/addon/tether/">Firefox Add-ons</a> · <a href="https://www.npmjs.com/package/tether-browser">npm</a></p>
+
 <p align="center"><a href="https://tether.udaysinh.me">Website</a> · <a href="https://tether.udaysinh.me/guide/">Guide</a> · <a href="https://discord.gg/UcB8z8u4JP">Discord</a> · <a href="LICENSE">MIT licence</a></p>
 
 <p align="center"><a href="https://tether.udaysinh.me/#watch"><img src="docs/demo.gif" width="860" alt="Demo: Claude Code pays an overdue invoice in a signed-in web app through Tether, hands the tab over for a phone code, then gives the app a dark theme and saves it" /></a></p>
@@ -62,11 +64,12 @@ tether setup
 
    Any other MCP client runs the same command as a stdio server.
 
-2. Install the extension from the [latest release](https://github.com/udaysinh-git/tether/releases/latest).
+2. Install the extension from your browser's store:
 
-   Firefox, Zen, LibreWolf, Floorp or Waterfox: download `tether-firefox-<version>.xpi` and open it with your browser, or use `about:addons`, the gear menu, **Install Add-on From File**. It's signed by Mozilla, and no key is needed; the bridge supplies it.
+   - Chrome, Brave, Edge and other Chromium browsers: [Tether on the Chrome Web Store](https://chromewebstore.google.com/detail/tether/bdkhlojbkkldeehiolelnmnpaanjdncc). Click **Add to Chrome**, then click the Tether icon and paste the pairing key.
+   - Firefox, Zen, LibreWolf, Floorp or Waterfox: [Tether on Firefox Add-ons](https://addons.mozilla.org/firefox/addon/tether/). Click **Add to Firefox**. No key is needed; the bridge supplies it.
 
-   Chrome, Brave or Edge: download `tether-chrome-<version>.zip` and unzip it, open `chrome://extensions`, turn on Developer mode, click **Load unpacked** and pick the unzipped folder. Click the Tether icon and paste the pairing key.
+   The stores update Tether by themselves, though a new version can take a few days to clear their review. To get it sooner, the [latest release](https://github.com/udaysinh-git/tether/releases/latest) has the same builds: open `tether-firefox-<version>.xpi` in a Firefox-based browser (it's signed by Mozilla), or unzip `tether-chrome-<version>.zip`, turn on Developer mode in `chrome://extensions`, click **Load unpacked** and pick the folder.
 
 3. Install the skill so agents know when and how to use Tether (see [The skill](#the-skill)).
 
@@ -302,7 +305,7 @@ Tether's settings page (popup, then **Settings**) has:
 
 ### Keeping it installed in Firefox
 
-Temporary add-ons disappear when the browser closes. To keep Tether:
+Installing from [Firefox Add-ons](https://addons.mozilla.org/firefox/addon/tether/) keeps Tether installed and updated. This section is for builds you make yourself: temporary add-ons disappear when the browser closes, so to keep one:
 
 - Sign it as an unlisted add-on, which only you receive. Create API credentials at addons.mozilla.org (Tools, Manage API Keys), set `WEB_EXT_API_KEY` and `WEB_EXT_API_SECRET`, bump `version` in `package.json` and run `npm run sign:firefox`. Install the `.xpi` from `dist/` through `about:addons`, the gear menu, **Install Add-on From File**. Later versions install over it and keep your settings.
 - Or, in browsers that allow unsigned add-ons (Firefox Developer Edition, Nightly and some forks), set `xpinstall.signatures.required` to `false` in `about:config`, run `npm run pack:firefox` and install `dist/tether-firefox-<version>.xpi` the same way.
