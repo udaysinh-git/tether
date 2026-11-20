@@ -27,7 +27,9 @@ const page = `<!doctype html><html><head><title>Test form</title>
 <select name="plan"><option>Free</option><option>Pro</option></select>
 <button type="submit">Create account</button></form>
 <a href="/two" target="_blank">Open docs</a>
+<label>Avatar <input type="file" name="avatar"></label>
 <div id="out"></div>
+<div style="height:3000px"></div>
 <script>
 document.getElementById('f').addEventListener('submit', async e => {
   e.preventDefault();
@@ -39,6 +41,7 @@ document.getElementById('f').addEventListener('submit', async e => {
 });
 document.querySelector('button').addEventListener('click', e => { window.lastClickTrusted = e.isTrusted; });
 window.secret = 42;
+document.addEventListener('keydown', e => { window.lastKey = e.key; });
 </script></body></html>`;
 
 const srv = http
@@ -127,7 +130,7 @@ try {
   ok(/textbox "Email" \[e\d+\]/.test(t.text) && /button "Create account"/.test(t.text), "snapshot has refs");
   let snap = t.text;
   const ref = (label) => snap.match(new RegExp(`${label.replace(/[()[\]]/g, "\\$&")}[^\\n]*?\\[(e\\d+)\\]`))[1];
-  const email = ref('textbox "Email"'), news = ref('checkbox "Newsletter"'), plan = ref("combobox"), submit = ref('button "Create account"'), docs = ref('link "Open docs"');
+  const email = ref('textbox "Email"'), news = ref('checkbox "Newsletter"'), plan = ref("combobox"), submit = ref('button "Create account"');
 
   t = await call("fill_form", { fields: [{ ref: news, value: true }, { ref: plan, value: "Pro" }] });
   ok(/checkbox "Newsletter" \[e\d+\] checked/.test(t.text) && /selected="Pro"/.test(t.text), "fill_form sets checkbox and select");
@@ -156,7 +159,46 @@ try {
   t = await call("cookies");
   ok(!t.r.isError, "cookies tool works");
 
-  await call("click", { ref: docs });
+  t = await call("read_text");
+  ok(/Sign up/.test(t.text) && /Fill this in, please\./.test(t.text), "read_text returns the page text");
+
+  t = await call("select_option", { ref: plan, values: ["Free"] });
+  ok(/selected="Free"/.test(t.text), "select_option picks an option");
+
+  await call("press_key", { key: "Escape", ref: email });
+  t = await call("run_js", { code: "window.lastKey" });
+  ok(/Escape/.test(t.text), "press_key sends the key to the page");
+
+  await call("scroll", { dy: 800 });
+  t = await call("run_js", { code: "window.scrollY" });
+  ok(Number(t.text) > 0, "scroll moves the page");
+
+  const upPath = path.join(home, "avatar.txt");
+  fs.writeFileSync(upPath, "hello");
+  const avatar = snap.match(/"Avatar"[^\n]*?\[(e\d+)\]/)?.[1];
+  await call("upload_file", { ref: avatar, paths: [upPath] });
+  t = await call("run_js", { code: "(() => { const f = document.querySelector('input[type=file]').files[0]; return f && f.name + ':' + f.size; })()" });
+  ok(/avatar\.txt:5/.test(t.text), "upload_file attaches a local file");
+
+  t = await call("navigate", { url: site + "/two?nav" });
+  ok(/Docs page/.test(t.text), "navigate goes to a URL");
+  t = await call("navigate", { action: "reload" });
+  ok(/Docs page/.test(t.text), "navigate reloads");
+  // Chrome's back button skips entries the user never interacted with, and
+  // fallback input isn't trusted, so only the trusted run can go back to the form.
+  t = await call("navigate", TRUSTED ? { action: "back" } : { url: site + "/" });
+  ok(/Sign up/.test(t.text), TRUSTED ? "navigate back returns" : "navigate returns to the form");
+  snap = (await call("snapshot")).text;
+
+  t = await call("open_tab", { url: site + "/two?opened" });
+  const opened = t.text.match(/Opened (\S+)/)?.[1];
+  ok(opened && /Docs page/.test(t.text), "open_tab opens a shared tab with a snapshot");
+  t = await call("close_tab", { tab: opened });
+  await wait(500);
+  ok(/Closed/.test(t.text) && !(await call("list_tabs")).text.includes("opened"), "close_tab closes it");
+  const docsNow = ref('link "Open docs"');
+
+  await call("click", { ref: docsNow });
   await wait(1500);
   t = await call("list_tabs");
   ok(t.text.includes("Docs"), "tab opened by a shared page joins the session");

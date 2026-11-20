@@ -8,6 +8,7 @@ import { listRequests, imagesOf, resolveRequest } from "./requests.js";
 import { saveMedia, formatMedia } from "./media.js";
 import { listWatchers, getWatcher, saveWatcher, runWatcher, deleteWatcher } from "./watchers.js";
 import { saveShots } from "./gallery.js";
+import { ANNOTATIONS, annotationsFor } from "./annotations.js";
 
 const tab = z.string().optional().describe('Tab handle from list_tabs, e.g. "chrome:812". Optional when only one tab is shared.');
 const ref = z.string().describe('Element ref from the latest snapshot, e.g. "e14".');
@@ -15,8 +16,8 @@ const ref = z.string().describe('Element ref from the latest snapshot, e.g. "e14
 const text = (s) => ({ content: [{ type: "text", text: typeof s === "string" ? s : JSON.stringify(s, null, 2) }] });
 
 export function registerTools(server, hub, agentName) {
-  const tool = (name, description, inputSchema, run, annotations = {}) =>
-    server.registerTool(name, { description, inputSchema, annotations }, async (args) => {
+  const tool = (name, description, inputSchema, run) =>
+    server.registerTool(name, { title: ANNOTATIONS[name]?.title, description, inputSchema, annotations: annotationsFor(name) }, async (args) => {
       try {
         return await run(args);
       } catch (err) {
@@ -46,8 +47,7 @@ export function registerTools(server, hub, agentName) {
       let out = shared.length ? "Shared tabs:\n" + shared.map(line).join("\n") : "No tab is shared yet.";
       if (rest.length) out += "\n\nOther tabs (bypass mode is on, you may use these too):\n" + rest.map(line).join("\n");
       return text(out);
-    },
-    { readOnlyHint: true }
+    }
   );
 
   tool(
@@ -86,16 +86,14 @@ export function registerTools(server, hub, agentName) {
       const { handle } = hub.resolveTab(a.tab);
       const res = await hub.callTab(handle, "snapshot", { maxLines: a.maxLines ?? 400 });
       return text(res.text);
-    },
-    { readOnlyHint: true }
+    }
   );
 
   tool(
     "read_text",
     "Get the visible text of the page, or of one element, as plain text. Good for reading articles, tables and results.",
     { tab, ref: ref.optional(), maxChars: z.number().int().optional().describe("Default 20000.") },
-    async (a) => text((await hub.callTab(a.tab, "readText", { ref: a.ref, maxChars: a.maxChars ?? 20000 })).text),
-    { readOnlyHint: true }
+    async (a) => text((await hub.callTab(a.tab, "readText", { ref: a.ref, maxChars: a.maxChars ?? 20000 })).text)
   );
 
   tool("click", "Click an element.", { tab, ref, double: z.boolean().optional() }, (a) => act(a, "click", { ref: a.ref, double: a.double }, `clicked ${a.ref}`));
@@ -144,8 +142,7 @@ export function registerTools(server, hub, agentName) {
     async (a) => {
       const res = await hub.callTab(a.tab, "waitFor", { text: a.text, gone: a.gone, ms: a.ms, timeout: a.timeout ?? 15000 }, (a.timeout ?? 15000) + (a.ms ?? 0) + 5000);
       return text(res.note || "Done.");
-    },
-    { readOnlyHint: true }
+    }
   );
 
   tool(
@@ -157,8 +154,7 @@ export function registerTools(server, hub, agentName) {
       hub.activity(agentName(), "screenshot", handle, "took a screenshot");
       const res = await hub.call(browser, "screenshot", { tabId });
       return { content: [{ type: "image", data: res.data, mimeType: res.mimeType }] };
-    },
-    { readOnlyHint: true }
+    }
   );
 
   tool(
@@ -214,7 +210,7 @@ export function registerTools(server, hub, agentName) {
     const all = listWatchers();
     if (!all.length) return text("No watchers yet.");
     return text(all.map((w) => `${w.id}  ${w.name}  every ${w.every} min  ${w.mode}${w.enabled ? "" : "  (off)"}\n    ${w.url}\n    ${w.last ? (w.last.ok ? `last: ${w.last.message ?? ""} (${ago(w.last.at)})` : `last run failed: ${w.last.error} (${ago(w.last.at)})`) : "not run yet"}`).join("\n"));
-  }, { readOnlyHint: true });
+  });
 
   tool(
     "run_watcher",
@@ -233,7 +229,7 @@ export function registerTools(server, hub, agentName) {
     if (!deleteWatcher(a.name)) throw new Error(`No watcher called ${a.name}`);
     hub.pushWatchers();
     return text(`Deleted ${a.name}.`);
-  }, { destructiveHint: true });
+  });
 
   // ---- media ----
 
@@ -244,8 +240,7 @@ export function registerTools(server, hub, agentName) {
     async (a) => {
       const res = await hub.callTab(a.tab, "listMedia", {});
       return text(res.items.length ? formatMedia(res.items) : "No media found on this page.");
-    },
-    { readOnlyHint: true }
+    }
   );
 
   tool(
@@ -271,8 +266,7 @@ export function registerTools(server, hub, agentName) {
       const m = /^data:([^;]+);base64,(.*)$/.exec(r.dataUrl || "");
       if (!m) throw new Error("Couldn't capture the frame.");
       return { content: [{ type: "text", text: `Frame at ${r.time?.toFixed?.(1) ?? "?"}s${r.fromScreenshot ? " (cropped from a screenshot; the site blocks reading the video)" : ""}` }, { type: "image", data: m[2], mimeType: m[1] }] };
-    },
-    { readOnlyHint: true }
+    }
   );
 
   // ---- downloads ----
@@ -308,8 +302,7 @@ export function registerTools(server, hub, agentName) {
     async (a) => {
       const res = await hub.call(browserFor(a), "downloads", {});
       return text(res.list.length ? res.list.map(dl).join("\n") : "No downloads yet in this session.");
-    },
-    { readOnlyHint: true }
+    }
   );
 
   tool(
@@ -386,32 +379,28 @@ export function registerTools(server, hub, agentName) {
       limit: z.number().int().optional().describe("Default 60."),
       clear: z.boolean().optional().describe("Clear the log instead of listing."),
     },
-    async (a) => text((await hub.callTab(a.tab, "network", a)).text),
-    { readOnlyHint: true }
+    async (a) => text((await hub.callTab(a.tab, "network", a)).text)
   );
 
   tool(
     "network_request",
     "Show one captured request in full: request and response headers, request body and response body.",
     { tab, id: z.string().describe('Request id from network_requests, e.g. "r42".'), maxChars: z.number().int().optional().describe("Body limit, default 20000.") },
-    async (a) => text((await hub.callTab(a.tab, "networkDetail", { id: a.id, maxChars: a.maxChars })).text),
-    { readOnlyHint: true }
+    async (a) => text((await hub.callTab(a.tab, "networkDetail", { id: a.id, maxChars: a.maxChars })).text)
   );
 
   tool(
     "console_messages",
     "Read console output and uncaught errors from a shared tab since it was shared.",
     { tab, level: z.string().optional().describe("log, info, warning, error, debug."), limit: z.number().int().optional().describe("Default 100."), clear: z.boolean().optional() },
-    async (a) => text((await hub.callTab(a.tab, "console", a)).text),
-    { readOnlyHint: true }
+    async (a) => text((await hub.callTab(a.tab, "console", a)).text)
   );
 
   tool(
     "cookies",
     "List the cookies the browser would send to the tab's current page, including httpOnly ones.",
     { tab },
-    async (a) => text((await hub.callTab(a.tab, "cookies", {})).text),
-    { readOnlyHint: true }
+    async (a) => text((await hub.callTab(a.tab, "cookies", {})).text)
   );
 
   // ---- user scripts (Tampermonkey-compatible .user.js files) ----
@@ -426,8 +415,7 @@ export function registerTools(server, hub, agentName) {
       const s = list("script");
       if (!s.length) return text("No scripts saved yet.");
       return text(s.map((x) => `${x.id}  ${x.name} v${x.version}  [${x.run}]  ${where(x)}${x.body === undefined ? "  (imported)" : ""}\n    ${x.description}`).join("\n"));
-    },
-    { readOnlyHint: true }
+    }
   );
 
   tool(
@@ -452,7 +440,7 @@ export function registerTools(server, hub, agentName) {
     const s = get("script", a.name);
     if (!s) throw new Error(`No script called ${a.name}`);
     return text(s.body !== undefined ? `${s.name} v${s.version} [${s.run}] on ${where(s)}\n\n${s.body}` : s.code);
-  }, { readOnlyHint: true });
+  });
 
   tool(
     "run_script",
@@ -510,8 +498,7 @@ export function registerTools(server, hub, agentName) {
       }
       if (reqs.length > 5) content.push({ type: "text", text: `${reqs.length - 5} more not shown.` });
       return { content };
-    },
-    { readOnlyHint: true }
+    }
   );
 
   tool(
@@ -569,19 +556,19 @@ export function registerTools(server, hub, agentName) {
   tool("list_styles", "List saved site styles, yours and imported ones.", {}, async () => {
     const s = list("style");
     return text(s.length ? s.map((x) => `${x.id}  ${x.name} v${x.version}  ${x.matches.join(" ") || "every site"}${x.body === undefined ? "  (imported)" : ""}\n    ${x.description}`).join("\n") : "No styles saved yet.");
-  }, { readOnlyHint: true });
+  });
 
   tool("get_style", "Read a saved style, to change it. Returns the editable CSS for styles you saved, or the whole UserCSS file for imported ones.", { name: z.string() }, async (a) => {
     const s = get("style", a.name);
     if (!s) throw new Error(`No style called ${a.name}`);
     return text(s.body !== undefined ? `${s.name} v${s.version} on ${s.matches.join(", ") || "every site"}\n\n${s.body}` : s.code);
-  }, { readOnlyHint: true });
+  });
 
   tool("delete_style", "Delete a saved style.", { name: z.string() }, async (a) => {
     if (!remove("style", a.name)) throw new Error(`No style called ${a.name}`);
     hub.pushScripts();
     return text(`Deleted ${a.name}.`);
-  }, { destructiveHint: true });
+  });
 
   // ---- what Tether recorded about sites ----
 
@@ -593,16 +580,14 @@ export function registerTools(server, hub, agentName) {
       const s = listSites();
       if (!s.length) return text("Nothing recorded yet. The user can record from the Tether popup (Record this tab, or Always record on a site).");
       return text(s.map((x) => `${x.host}  ${x.sessions} sessions, ${x.events} events${x.notes ? ", has notes" : ""}${x.last ? `, last ${new Date(x.last).toISOString().slice(0, 10)}` : ""}`).join("\n"));
-    },
-    { readOnlyHint: true }
+    }
   );
 
   tool(
     "site_map",
     "Summarise everything recorded for a site: its pages, the buttons and links the user actually uses on each (with CSS selectors), the fields they fill, the API endpoints behind it, common paths between pages, and saved notes. Pass page for one page in detail including its last outline. Read this before automating or restyling a site.",
     { site: z.string().describe('Host, e.g. "erp.example.com".'), page: z.string().optional().describe('Path from the map, e.g. "/orders/:id/edit".') },
-    async (a) => text(siteMap(resolveHost(a.site), { page: a.page })),
-    { readOnlyHint: true }
+    async (a) => text(siteMap(resolveHost(a.site), { page: a.page }))
   );
 
   tool(
@@ -614,8 +599,7 @@ export function registerTools(server, hub, agentName) {
       if (a.session) return text(readSession(host, a.session, { from: a.from, limit: a.limit }));
       const s = sessionsOf(host);
       return text(s.length ? s.map((x) => `${x.id}  ${new Date(x.started).toISOString().slice(0, 16).replace("T", " ")}  ${x.events} events  ${x.browser || ""}  ${x.startUrl}`).join("\n") : `No sessions for ${host}.`);
-    },
-    { readOnlyHint: true }
+    }
   );
 
   tool(
@@ -635,7 +619,7 @@ export function registerTools(server, hub, agentName) {
     if (!remove("script", a.name)) throw new Error(`No script called ${a.name}`);
     hub.pushScripts();
     return text(`Deleted ${a.name}.`);
-  }, { destructiveHint: true });
+  });
 }
 
 function short(url) {

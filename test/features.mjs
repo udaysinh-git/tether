@@ -38,6 +38,9 @@ const lab = () => `<!doctype html><html><head><title>Lab</title></head><body>
   const c = document.createElement('canvas'); c.width = 8; c.height = 8;
   const g = c.getContext('2d'); g.fillStyle = '#e8a33d'; g.fillRect(0, 0, 8, 8);
   c.toBlob(b => { document.getElementById('blobimg').src = URL.createObjectURL(b); });
+  // A live canvas stream gives the video real frames for video_frame.
+  const v = document.getElementById('vid'); v.srcObject = c.captureStream(10); v.play().catch(() => {});
+  setInterval(() => { g.fillStyle = g.fillStyle === '#e8a33d' ? '#3d8ee8' : '#e8a33d'; g.fillRect(0, 0, 8, 8); }, 100);
 </script></body></html>`;
 
 const frame = `<!doctype html><html><head><title>Widget</title></head><body style="margin:0">
@@ -147,6 +150,8 @@ try {
   ok(/report.*\.csv/.test(t.text) && /complete/.test(t.text), "wait_for_download returns the finished file");
   t = await call("list_downloads", { tab: handle });
   ok(/report/.test(t.text), "list_downloads shows the session's downloads");
+  t = await call("download_file", { tab: handle, url: site + "/report.csv", filename: "direct-report.csv" });
+  ok(/complete/.test(t.text) && /from \S+\/report\.csv/.test(t.text) && fs.existsSync(t.text.split("\n")[0].trim()), "download_file saves a URL through the browser");
 
   // ---- media
   t = await call("list_media", { tab: handle });
@@ -159,6 +164,9 @@ try {
   t = await call("save_media", { tab: handle, id: blobId });
   const blobPath = t.text.split("\n")[0];
   ok(fs.existsSync(blobPath) && fs.readFileSync(blobPath).subarray(1, 4).toString() === "PNG", "save_media reads a blob: URL out of the page");
+  const vidRef = (await call("list_media", { tab: handle })).text.match(/video \[(e\d+)\]/)?.[1];
+  t = await call("video_frame", { tab: handle, ref: vidRef });
+  ok(t.r.content.some((c) => c.type === "image") && /Frame at/.test(t.text), "video_frame returns the video's current frame as an image");
 
   // ---- element picker request
   const sentPick = await sw.evaluate(async (id) => {

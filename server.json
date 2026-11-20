@@ -8,12 +8,12 @@
     "url": "https://github.com/udaysinh-git/tether",
     "source": "github"
   },
-  "version": "0.3.5",
+  "version": "0.3.6",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "tether-browser",
-      "version": "0.3.5",
+      "version": "0.3.6",
       "transport": {
         "type": "stdio"
       }

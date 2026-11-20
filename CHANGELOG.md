@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.6 (2026-11-20)
+
+- Every tool now has a title and sets all four MCP hints (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`), so hosts can ask before a click, script or delete and skip the prompt for reads. The table lives in `host/annotations.js`, and a tool without an entry fails to register.
+- Tests now call all 53 tools. `test/tools.mjs` checks the annotations and the script, style, watcher and notes tools without a browser; the browser suites gained navigation, tab, key, scroll, select, upload, download and video frame checks.
+
 ## 0.3.5 (2026-11-17)
 
 - The MCP server reports its real version to clients instead of 0.2.3.
