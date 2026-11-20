@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.1 (2026-11-21)
+
+- Tether is on the Chrome Web Store and Firefox Add-ons. `tether setup`, `tether doctor` and the hint agents get when no browser is connected now link to both stores.
+- The README opens with store buttons and status badges.
+- `scripts/sign-firefox.ps1 -Channel listed` submits a version to the public Firefox listing.
+- Firefox gets this version from Firefox Add-ons only; Mozilla allows one build per version number, so there is no separate signed file this time.
+
 ## 0.4.0 (2026-11-20)
 
 - Read-only sharing. **Read only** next to Share this tab lets agents read a page (outline, text, screenshots, network, console) while every click, keystroke, navigation and script is refused. Tabs it opens inherit it, and the popup switches a shared tab either way.

@@ -1,7 +1,9 @@
-# Signs the Firefox build with Mozilla (unlisted channel) using the AMO API key
+# Signs the Firefox build with Mozilla using the AMO API key
 # stored in Windows Credential Manager under "tether-amo".
 # Store it once:  cmdkey /generic:tether-amo /user:<JWT issuer> /pass:<JWT secret>
-# Then run:       powershell -File scripts/sign-firefox.ps1   (writes dist/tether-<version>.xpi)
+# Then run:       powershell -File scripts/sign-firefox.ps1   (unlisted: writes dist/tether-<version>.xpi)
+#                 powershell -File scripts/sign-firefox.ps1 -Channel listed   (submits to the public listing for review)
+param([ValidateSet("unlisted", "listed")] [string]$Channel = "unlisted")
 $ErrorActionPreference = "Stop"
 Add-Type -Namespace Win -Name Cred -MemberDefinition @"
 [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
@@ -21,4 +23,4 @@ try {
 } finally { [Win.Cred]::CredFree($p) }
 Set-Location (Split-Path $PSScriptRoot)
 node scripts/build-ext.js
-npx --yes web-ext@8 sign -s dist/firefox -a dist --channel unlisted
+npx --yes web-ext@8 sign -s dist/firefox -a dist --channel $Channel
