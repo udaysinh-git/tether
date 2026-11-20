@@ -5,7 +5,6 @@
 - Tether is on the Chrome Web Store and Firefox Add-ons. `tether setup`, `tether doctor` and the hint agents get when no browser is connected now link to both stores.
 - The README opens with store buttons and status badges.
 - `scripts/sign-firefox.ps1 -Channel listed` submits a version to the public Firefox listing.
-- Firefox gets this version from Firefox Add-ons only; Mozilla allows one build per version number, so there is no separate signed file this time.
 
 ## 0.4.0 (2026-11-20)
 
