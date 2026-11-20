@@ -54,7 +54,8 @@ function itemRow(kind, s) {
 
 async function load() {
   const st = await send({ type: "state", tabId: -1 });
-  const { key = "", autoRecord = [], standby, askWindow, showCursor, showPill, sounds } = await api.storage.local.get(["key", "autoRecord", "standby", "askWindow", "showCursor", "showPill", "sounds"]);
+  const { key = "", autoRecord = [], standby, askWindow, showCursor, showPill, sounds, askRisky } = await api.storage.local.get(["key", "autoRecord", "standby", "askWindow", "showCursor", "showPill", "sounds", "askRisky"]);
+  $("askRisky").setAttribute("aria-checked", String(askRisky !== false));
   $("sounds").setAttribute("aria-checked", String(sounds !== false));
   $("showPill").setAttribute("aria-checked", String(showPill !== false));
   $("showCursor").setAttribute("aria-checked", String(showCursor !== false));
@@ -160,6 +161,7 @@ document.addEventListener("click", async (e) => {
   if (t.id === "standby") return send({ type: "setSettings", standby: flip(t) });
   if (t.id === "askWindow") return send({ type: "setSettings", askWindow: flip(t) });
   if (t.id === "showCursor") return api.storage.local.set({ showCursor: flip(t) });
+  if (t.id === "askRisky") return api.storage.local.set({ askRisky: flip(t) });
   if (t.id === "sounds") return api.storage.local.set({ sounds: flip(t) });
   if (t.id === "showPill") return api.storage.local.set({ showPill: flip(t) });
   if (t.id === "recValues") return send({ type: "setRecordValues", on: flip(t) });

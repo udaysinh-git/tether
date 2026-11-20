@@ -98,3 +98,25 @@ footer { display: flex; justify-content: space-between; align-items: center; pad
 .toggle-row { display: flex; align-items: center; gap: 10px; min-height: 32px; padding: 0 8px; }
 .toggle-row .grow { flex: 1; min-width: 0; }
 .composer textarea:focus { outline: none; border-color: rgb(212 175 55 / 0.7); }
+
+/* Share: the gold button does full control, the quiet one beside it read only. */
+.share-row { display: flex; gap: 8px; }
+.share-row .share { flex: 1; width: auto; }
+.share-read { padding: 11px 14px; font-size: 14px; }
+
+/* An agent waiting for Allow or Deny: the card gets a gold edge. */
+.ask-card { box-shadow: inset 0 0 0 1px rgb(212 175 55 / 0.55); }
+.ask-card .head { align-items: flex-start; }
+.ask-card .head .dot { margin-top: 6px; }
+
+.toggle-row.flush { padding: 0; }
+.toggle-row.flush p:first-child { font-weight: 500; }
+
+/* Three-way choice, as pills in a well. */
+.ask-row { align-items: center; padding: 6px 8px; }
+.seg { flex: none; display: flex; gap: 2px; padding: 2px; border-radius: 999px; background: var(--raised); }
+.seg button { padding: 4px 10px; font-size: 12.5px; background: transparent; color: var(--text-2); }
+.seg button:hover { color: var(--text); background: var(--raised-hover); }
+.seg button[aria-checked="true"] { background: var(--card); color: var(--text); box-shadow: inset 0 0 0 1px var(--line); }
+
+footer .links { display: flex; gap: 14px; }

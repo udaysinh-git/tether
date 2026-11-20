@@ -13,7 +13,9 @@ const CONSOLE_MAX = 400;
 const BODY_MAX = 2 * 1024 * 1024;
 
 const state = {
-  shared: new Map(), // tabId -> { by, since }
+  shared: new Map(), // tabId -> { by, since, mode: "full" | "read" }
+  confirming: new Map(), // tabId -> { id, agent, action, since } while the user decides
+  feed: [], // recent agent and user events, newest last, for the side panel
   conn: "off", // off | connecting | connected | waiting | denied
   connError: "",
   agents: [],
@@ -57,6 +59,7 @@ const ready = init();
 async function init() {
   for (const [id, v] of await restore("shared")) state.shared.set(id, v);
   state.bypass = !!(await api.storage.session.get("bypass")).bypass;
+  state.feed = (await api.storage.session.get("feed")).feed || [];
   const local = await api.storage.local.get(["scripts", "styles", "disabledStyles", "disabledScripts", "autoRecord", "recordValues", "recQueue", "pendingRequests", "requests"]);
   state.disabledScripts = new Set(local.disabledScripts || []);
   state.scripts = local.scripts || [];
@@ -265,10 +268,14 @@ async function onHostMessage(sock, raw) {
       break;
     }
     case "activity":
-      if (msg.tabId != null && state.shared.has(msg.tabId)) {
+      // Page actions report their own line when they finish (or not at all if
+      // the user declines), so the host's "clicked e3" is skipped for them.
+      if (msg.tabId != null && state.shared.has(msg.tabId) && !FEED_FROM_RESULT.has(msg.tool)) {
         state.activity.set(msg.tabId, { agent: msg.agent, summary: msg.summary, at: msg.at });
         toContent(msg.tabId, { cmd: "activity", agent: msg.agent, summary: msg.summary }).catch(() => {});
       }
+      // Page actions go into the feed with the page's own wording once they finish.
+      if (!FEED_FROM_RESULT.has(msg.tool)) pushFeed(msg.tabId, msg.agent, msg.summary);
       broadcast();
       break;
     case "call": {
@@ -286,12 +293,13 @@ async function onHostMessage(sock, raw) {
 
 // ---------------------------------------------------------------- sharing
 
-async function share(tabId, by = "user") {
-  if (state.shared.has(tabId)) return;
+async function share(tabId, by = "user", mode = "full") {
+  if (state.shared.has(tabId)) return setMode(tabId, mode);
   const tab = await api.tabs.get(tabId);
   if (!shareable(tab.url)) throw new Error("Browser pages can't be shared.");
-  state.shared.set(tabId, { by, since: Date.now() });
+  state.shared.set(tabId, { by, since: Date.now(), mode: mode === "read" ? "read" : "full" });
   await persist();
+  if (by === "user") pushFeed(tabId, "You", mode === "read" ? "shared this tab, read only" : "shared this tab", "user");
   setBadge(tabId, true);
   await ensureContent(tabId).catch(() => {});
   await attachCdp(tabId);
@@ -301,9 +309,28 @@ async function share(tabId, by = "user") {
   broadcast();
 }
 
+// Read only: agents can look (outline, text, screenshots, network, console)
+// but every action that would change the page is refused.
+async function setMode(tabId, mode) {
+  const v = state.shared.get(tabId);
+  if (!v) return;
+  mode = mode === "read" ? "read" : "full";
+  if ((v.mode || "full") === mode) return;
+  v.mode = mode;
+  await persist();
+  pushFeed(tabId, "You", mode === "read" ? "made this tab read only" : "gave agents full control of this tab", "user");
+  if (mode === "read") answerConfirm(tabId, false);
+  toContent(tabId, { cmd: "mode", mode }, false).catch(() => {});
+  pushTabs();
+  broadcast();
+}
+
 async function unshare(tabId) {
   if (!state.shared.has(tabId)) return;
+  const by = state.shared.get(tabId).by;
   state.shared.delete(tabId);
+  answerConfirm(tabId, false);
+  if (by === "user") pushFeed(tabId, "You", "stopped sharing this tab", "user");
   if (state.paused.has(tabId)) resumeTab(tabId, false);
   state.activity.delete(tabId);
   state.net.delete(tabId);
@@ -455,12 +482,16 @@ const READ_ONLY = new Set(["snapshot", "readText", "network", "networkDetail", "
 
 function pauseTab(tabId, info) {
   state.paused.set(tabId, { ...info, since: Date.now() });
+  if (info.by === "user") pushFeed(tabId, "You", "paused this tab", "user");
+  else pushFeed(tabId, info.agent, `asked you: ${info.message || "take over this tab"}`, "ask");
   toContent(tabId, { cmd: "paused", paused: state.paused.get(tabId) }, false).catch(() => {});
   broadcast();
 }
 
 function resumeTab(tabId, resumed = true) {
+  const was = state.paused.get(tabId);
   state.paused.delete(tabId);
+  if (was && resumed) pushFeed(tabId, "You", was.by === "agent" ? "pressed Done" : "resumed this tab", "user");
   for (const r of pauseWaiters.get(tabId) || []) r(resumed);
   pauseWaiters.delete(tabId);
   toContent(tabId, { cmd: "paused", paused: null }, false).catch(() => {});
@@ -489,6 +520,176 @@ async function waitUser(tabId, { agent, message, timeout = 300000 }) {
   if (!resumed) return { resumed: false, note: "The user stopped sharing the tab." };
   return { resumed: true, note: message ? "The user pressed Done." : "The user resumed." };
 }
+
+// ---------------------------------------------------------------- read only + asking first
+// Actions that change a page. A read-only tab refuses them all.
+const ACTING = new Set(["click", "hover", "type", "fill", "select", "press", "upload", "runJs", "runItem", "previewCss", "navigate", "closeTab", "styleShots"]);
+// Actions the user can be asked to allow first. Risky ones (a button that
+// buys, sends, posts or deletes; Enter in such a form) ask by default; a site
+// set to "every action" asks for all of these, and "never" trusts the site.
+const ASKABLE = new Set(["click", "type", "fill", "select", "press", "upload", "runJs", "runItem", "navigate", "closeTab"]);
+// MCP clients give up on a tool call after about a minute (Codex's default is
+// 60 s), so one call waits at most WAIT_MS. The question stays on screen for
+// QUESTION_MS; calling the same action again picks it back up, and an answer
+// given between calls is kept for that next call.
+let WAIT_MS = 45000; // let: the tests shorten it
+const QUESTION_MS = 300000;
+const confirmWaiters = new Map(); // tabId -> [resolve(true | false | "expired")]
+const answered = new Map(); // tabId -> { action, allow, at } waiting for the agent's next call
+const STILL_DECIDING = "The user is still deciding whether to allow your previous action on this tab. Repeat that same call to keep waiting, or ask them in chat.";
+
+const READ_ONLY_NOTE = "The user shared this tab read only. You can read it (snapshot, read_text, screenshot, network_requests, console_messages) but not click, type, navigate or run scripts. Ask the user in chat to give you full control from the Tether popup if you need to act.";
+
+async function siteAsk(host) {
+  const { siteAsk: map = {}, askRisky } = await api.storage.local.get(["siteAsk", "askRisky"]);
+  return map[host] || (askRisky === false ? "never" : "risky");
+}
+
+async function setSiteAsk(host, value) {
+  const { siteAsk: map = {} } = await api.storage.local.get("siteAsk");
+  if (value === "all" || value === "never") map[host] = value;
+  else delete map[host];
+  await api.storage.local.set({ siteAsk: map });
+}
+
+function shortUrl(url) {
+  try { const u = new URL(url); return u.host + (u.pathname === "/" ? "" : u.pathname); } catch { return url || ""; }
+}
+
+// What the user will read after "<agent> wants to ...".
+function describeAction(method, p, what) {
+  switch (method) {
+    case "click": return `click ${what || "an element"}`;
+    case "type": return p.submit ? `type into ${what || "a field"} and submit the form` : `type into ${what || "a field"}`;
+    case "fill": return `fill ${p.fields?.length || 0} field${p.fields?.length === 1 ? "" : "s"}`;
+    case "select": return `choose ${(p.values || []).map((v) => `“${v}”`).join(", ")}`;
+    case "press": return `press ${p.key}${what ? ` in ${what}` : ""}`;
+    case "upload": return `attach ${p.files?.length || 0} file${p.files?.length === 1 ? "" : "s"}`;
+    case "runJs": return "run JavaScript on this page";
+    case "runItem": return "run a saved script on this page";
+    case "navigate": return p.url ? `go to ${shortUrl(p.url)}` : p.action === "reload" || !p.action ? "reload the page" : `go ${p.action}`;
+    case "closeTab": return "close this tab";
+  }
+  return method;
+}
+
+async function gate(tabId, method, p) {
+  const open = state.confirming.get(tabId);
+  const tab = await api.tabs.get(tabId).catch(() => null);
+  const mode = await siteAsk(hostOf(tab?.url || ""));
+  if (mode === "never" || !ASKABLE.has(method)) {
+    if (open) throw new Error(STILL_DECIDING);
+    return;
+  }
+  let kind = null;
+  if (method === "click") kind = "click";
+  else if (method === "type" && p.submit) kind = "submit";
+  else if (method === "press" && p.ref && /(^|\+)Enter$/i.test(p.key || "")) kind = "submit";
+  let risk = null;
+  if (kind || (mode === "all" && p.ref)) {
+    const fr = splitRef(p.ref);
+    risk = await toContent(tabId, { cmd: "risk", ref: fr.ref, kind: kind || "click" }, true, fr.frameId).catch(() => null);
+  }
+  if (!(mode === "all" || (kind && risk?.risky))) {
+    if (open) throw new Error(STILL_DECIDING);
+    return;
+  }
+  const what = kind === "submit" && risk?.risky ? `the form with ${risk.what}` : risk?.what;
+  const action = kind === "submit" && risk?.risky ? `submit ${what}` : describeAction(method, p, what);
+  await confirmAction(tabId, p.agent, action, risk?.reason);
+}
+
+const declined = (action) => new Error(`The user declined: ${action}. Don't retry it; ask them in chat if it still matters.`);
+
+async function confirmAction(tabId, agent, action, reason) {
+  // Answered while the agent's previous call had already given up waiting.
+  const done = answered.get(tabId);
+  answered.delete(tabId);
+  if (done && done.action === action && Date.now() - done.at < QUESTION_MS) {
+    if (!done.allow) throw declined(action);
+    return;
+  }
+  let c = state.confirming.get(tabId);
+  if (c && c.action !== action) throw new Error(STILL_DECIDING);
+  if (!c) {
+    c = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), agent: agent || "Your agent", action, reason: reason || "", since: Date.now() };
+    state.confirming.set(tabId, c);
+    c.expire = setTimeout(() => expireConfirm(tabId, c.id), QUESTION_MS);
+    pushFeed(tabId, c.agent, `asked to ${action}`, "ask");
+    toContent(tabId, { cmd: "confirm", confirm: publicConfirm(c) }, false).catch(() => {});
+    ring("hail");
+    const t = await api.tabs.update(tabId, { active: true }).catch(() => null);
+    if (t) api.windows.update(t.windowId, { focused: true }).catch(() => {});
+    broadcast();
+  }
+  const allow = await new Promise((resolve) => {
+    const timer = setTimeout(() => finish(undefined), WAIT_MS);
+    const finish = (v) => { clearTimeout(timer); const list = confirmWaiters.get(tabId) || []; const i = list.indexOf(finish); if (i >= 0) list.splice(i, 1); resolve(v); };
+    confirmWaiters.set(tabId, [...(confirmWaiters.get(tabId) || []), finish]);
+  });
+  if (allow === undefined) throw new Error(`The user hasn't answered yet; the question “${action}” is still on their screen. Repeat the same call to keep waiting for their answer, or ask them in chat.`);
+  if (allow === "expired") throw new Error(`The user didn't answer, so Tether didn't ${action}. Ask them in chat before trying again.`);
+  if (!allow) throw declined(action);
+}
+
+// The parts of a question the page, popup and panel may see.
+const publicConfirm = (c) => (c ? { id: c.id, agent: c.agent, action: c.action, reason: c.reason, since: c.since } : null);
+
+function closeConfirm(tabId, c) {
+  clearTimeout(c.expire);
+  state.confirming.delete(tabId);
+  toContent(tabId, { cmd: "confirm", confirm: null }, false).catch(() => {});
+}
+
+function answerConfirm(tabId, allow) {
+  const c = state.confirming.get(tabId);
+  if (!c) return false;
+  closeConfirm(tabId, c);
+  pushFeed(tabId, "You", `${allow ? "allowed" : "declined"}: ${c.action}`, allow ? "allow" : "deny");
+  const waiting = confirmWaiters.get(tabId) || [];
+  confirmWaiters.delete(tabId);
+  if (waiting.length) for (const w of [...waiting]) w(!!allow);
+  else answered.set(tabId, { action: c.action, allow: !!allow, at: Date.now() });
+  broadcast();
+  return true;
+}
+
+function expireConfirm(tabId, id) {
+  const c = state.confirming.get(tabId);
+  if (!c || c.id !== id) return;
+  closeConfirm(tabId, c);
+  pushFeed(tabId, "You", `didn't answer: ${c.action}`, "deny");
+  const waiting = confirmWaiters.get(tabId) || [];
+  confirmWaiters.delete(tabId);
+  for (const w of [...waiting]) w("expired");
+  broadcast();
+}
+
+// ---------------------------------------------------------------- activity feed
+// What agents did and what the user answered, for the side panel. Kept for
+// this browser session only.
+const FEED_MAX = 200;
+// Tools whose finished result (from the page) is a better line than the host's summary.
+const FEED_FROM_RESULT = new Set(["click", "hover", "type", "fill_form", "select_option", "press_key", "scroll", "upload_file", "navigate"]);
+const FEED_METHODS = new Set(["click", "hover", "type", "fill", "select", "press", "scroll", "upload", "navigate"]);
+let feedTimer;
+
+function pushFeed(tabId, agent, text, kind = "act") {
+  if (!text) return;
+  const at = Date.now();
+  const add = (tab) => {
+    state.feed.push({ tabId: tabId ?? null, agent: agent || "", text: String(text), kind, at, host: tab ? hostOf(tab.url) : "", title: tab?.title || "" });
+    state.feed.sort((a, b) => a.at - b.at);
+    if (state.feed.length > FEED_MAX) state.feed.splice(0, state.feed.length - FEED_MAX);
+    clearTimeout(feedTimer);
+    feedTimer = setTimeout(() => api.storage.session.set({ feed: state.feed }).catch(() => {}), 300);
+    broadcast();
+  };
+  if (tabId == null) return add(null);
+  api.tabs.get(tabId).then(add, () => add(null));
+}
+
+const lowerFirst = (s) => (s ? s[0].toLowerCase() + s.slice(1) : s);
 
 // ---------------------------------------------------------------- agent sessions
 // An agent can ask for its own window (same logins, separate from the user's
@@ -613,7 +814,7 @@ async function tabList() {
   for (const [id, v] of state.shared) {
     try {
       const t = await api.tabs.get(id);
-      out.push({ id, title: t.title, url: t.url, active: t.active, windowId: t.windowId, by: v.by, shared: true, favIconUrl: t.favIconUrl });
+      out.push({ id, title: t.title, url: t.url, active: t.active, windowId: t.windowId, by: v.by, shared: true, readOnly: v.mode === "read", favIconUrl: t.favIconUrl });
     } catch {}
   }
   if (state.bypass) {
@@ -641,7 +842,8 @@ async function pushTabsNow() {
 api.webNavigation.onCreatedNavigationTarget.addListener(async (d) => {
   await ready;
   if (!state.shared.has(d.sourceTabId) || state.shared.has(d.tabId)) return;
-  state.shared.set(d.tabId, { by: "opener", since: Date.now() });
+  // A read-only tab's children are read only too.
+  state.shared.set(d.tabId, { by: "opener", since: Date.now(), mode: state.shared.get(d.sourceTabId).mode || "full" });
   await persist();
   setBadge(d.tabId, true);
   attachCdp(d.tabId);
@@ -1437,12 +1639,28 @@ async function handleCall(method, p) {
     const ps = state.paused.get(tabId);
     throw new Error(ps.by === "agent" ? "Waiting for the user to press Done on this tab. Call wait_for_user to wait for them." : "The user paused this tab. Call wait_for_user to wait until they resume, or ask them in chat.");
   }
+  if (tabId != null && ACTING.has(method)) {
+    if (state.shared.get(tabId)?.mode === "read") throw new Error(READ_ONLY_NOTE);
+    if (state.confirming.has(tabId) && !ASKABLE.has(method)) throw new Error(STILL_DECIDING);
+    await gate(tabId, method, p);
+  }
+  const res = await runCall(method, p);
+  if (tabId != null && FEED_METHODS.has(method)) {
+    const line = method === "navigate" ? (p.url ? `went to ${shortUrl(p.url)}` : p.action === "back" || p.action === "forward" ? `went ${p.action}` : "reloaded the page") : lowerFirst(res?.note);
+    pushFeed(tabId, p.agent, line);
+    // The popup and panel show this line instead of the host's "clicked e3".
+    if (line && state.shared.has(tabId)) state.activity.set(tabId, { agent: p.agent || state.activity.get(tabId)?.agent || "Agent", summary: line, at: Date.now() });
+  }
+  return res;
+}
 
+async function runCall(method, p) {
+  const tabId = p.tabId;
   switch (method) {
     case "openTab": {
       if (p.openerTabId != null) await requireShared(p.openerTabId);
       const t = await api.tabs.create({ url: p.url, active: true, openerTabId: p.openerTabId });
-      state.shared.set(t.id, { by: "agent", since: Date.now() });
+      state.shared.set(t.id, { by: "agent", since: Date.now(), mode: p.openerTabId != null ? state.shared.get(p.openerTabId)?.mode || "full" : "full" });
       await persist();
       setBadge(t.id, true);
       await attachCdp(t.id);
@@ -1899,7 +2117,9 @@ async function popupState(tabId) {
     agents: state.agents,
     browserHasDebugger: HAS_CDP,
     userScripts: state.userScripts,
-    tab: tab && { id: tab.id, title: tab.title, url: tab.url, favIconUrl: tab.favIconUrl, shareable: shareable(tab.url), shared: state.shared.has(tab.id), paused: state.paused.get(tab.id) || null, by: state.shared.get(tab.id)?.by, cdp: state.cdp.has(tab.id), activity: state.activity.get(tab.id) },
+    tab: tab && { id: tab.id, title: tab.title, url: tab.url, favIconUrl: tab.favIconUrl, shareable: shareable(tab.url), shared: state.shared.has(tab.id), paused: state.paused.get(tab.id) || null, by: state.shared.get(tab.id)?.by, mode: state.shared.get(tab.id)?.mode || "full", confirming: publicConfirm(state.confirming.get(tab.id)), cdp: state.cdp.has(tab.id), activity: state.activity.get(tab.id) },
+    siteAsk: tab ? await siteAsk(hostOf(tab.url)) : "risky",
+    hasPanel: !!(api.sidePanel || api.sidebarAction),
     others: (await tabList()).filter((t) => t.id !== tabId).map((t) => ({ ...t, activity: state.activity.get(t.id) })),
     scripts: tab ? scriptsFor(tab.url).map(({ id, name, description, run }) => ({ id, name, description, run, on: !state.disabledScripts.has(id) })) : [],
     allScripts: state.scripts.map(({ id, name, description, run, matches, includes, version, body }) => ({ id, name, description, run, matches: matches.length ? matches : includes, version, imported: body === undefined, on: !state.disabledScripts.has(id) })),
@@ -1907,8 +2127,26 @@ async function popupState(tabId) {
   };
 }
 
+// Everything the side panel shows: every shared tab with its state, what is
+// waiting for an answer, and the activity feed.
+async function panelState() {
+  const s = await settings();
+  const tabs = (await tabList()).filter((t) => t.shared !== false).map((t) => ({
+    ...t,
+    host: hostOf(t.url),
+    mode: state.shared.get(t.id)?.mode || "full",
+    paused: state.paused.get(t.id) || null,
+    confirming: publicConfirm(state.confirming.get(t.id)),
+    activity: state.activity.get(t.id) || null,
+  }));
+  return { paired: !!s.key || IS_FIREFOX, conn: state.conn, agents: state.agents, bypass: state.bypass, tabs, feed: state.feed.slice(-120) };
+}
+
+let broadcastTimer;
 function broadcast() {
-  for (const port of ports) port.postMessage({ type: "changed" });
+  // Coalesce bursts (an action can change several things at once).
+  clearTimeout(broadcastTimer);
+  broadcastTimer = setTimeout(() => { for (const port of ports) port.postMessage({ type: "changed" }); }, 40);
 }
 
 api.runtime.onConnect.addListener((port) => {
@@ -1927,8 +2165,27 @@ api.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         ring(msg.name, msg.opts);
         return { ok: true };
       case "share":
-        await share(msg.tabId);
+        await share(msg.tabId, "user", msg.mode);
         return { ok: true };
+      case "panelState":
+        return panelState();
+      case "setMode":
+        await setMode(msg.tabId, msg.mode);
+        return { ok: true };
+      case "setSiteAsk":
+        await setSiteAsk(msg.host, msg.value);
+        broadcast();
+        return { ok: true };
+      case "confirmAnswer": {
+        // From the popup or side panel (extension pages, which name the tab), or
+        // from the pill on the page itself, which may only answer for its own tab.
+        const fromPage = !String(sender.url || "").startsWith(api.runtime.getURL(""));
+        const id = fromPage ? sender.tab?.id : msg.tabId;
+        if (id == null || (fromPage && msg.tabId != null && msg.tabId !== id)) return { ok: false };
+        const c = state.confirming.get(id);
+        if (!c || (msg.id && msg.id !== c.id)) return { ok: false };
+        return { ok: answerConfirm(id, msg.allow) };
+      }
       case "unshare":
         await unshare(msg.tabId);
         return { ok: true };
@@ -2047,7 +2304,7 @@ api.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (sender.tab && state.shared.has(sender.tab.id) && !state.cdp.has(sender.tab.id)) pushConsole(sender.tab.id, msg.entry);
         return { ok: true };
       case "pillState":
-        return { shared: state.shared.has(sender.tab?.id), paused: state.paused.get(sender.tab?.id) || null, agents: state.agents, conn: state.conn, activity: state.activity.get(sender.tab?.id), recording: state.recording.has(sender.tab?.id) ? { values: state.recordValues } : null };
+        return { shared: state.shared.has(sender.tab?.id), paused: state.paused.get(sender.tab?.id) || null, confirm: publicConfirm(state.confirming.get(sender.tab?.id)), mode: state.shared.get(sender.tab?.id)?.mode || "full", agents: state.agents, conn: state.conn, activity: state.activity.get(sender.tab?.id), recording: state.recording.has(sender.tab?.id) ? { values: state.recordValues } : null };
     }
   })().then(
     (r) => sendResponse(r),

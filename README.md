@@ -104,6 +104,8 @@ A tab becomes available to agents in one of these ways:
 4. The agent opens a tab with `open_tab`, or any tab is opened inside the agent's own window.
 5. You turn on bypass mode, which makes every tab available until you turn it off or close the browser.
 
+Next to **Share this tab** the popup has **Read only**. A read-only tab can be read (outline, text, screenshots, network, console), but every click, keystroke, navigation and script is refused with a note telling the agent to ask you. Tabs it opens are read only too. Switch a shared tab between the two from the popup at any time.
+
 A shared tab gets a gold badge on the toolbar icon and a small status panel on the page with the agent's name, its latest action, **Pause** and **Stop**.
 
 ![The status panel on a shared page: "Shared with Claude Code", the latest action, Pause and Stop](docs/page-pill.png)
@@ -130,6 +132,22 @@ The agent has a visible cursor: a gold pointer with its name moves to each eleme
 ![Status panel: "Claude Code needs you. Please type the 6-digit code from your phone, then press Done." with Done and Stop](docs/page-pill-ask.png)
 
 Drag the status panel anywhere on the page; double-click it to put it back in the corner. To keep pages clear, turn off **Show status on the page** in the popup. It then appears only when the agent needs you.
+
+### Asking before risky actions
+
+Before the agent clicks a button that buys, pays, sends, posts, deletes or confirms, or presses Enter in a form whose button does, Tether stops and asks you. The button gets a gold outline, the agent's cursor rests on it, and the status panel shows what the agent wants to do with **Deny** and **Allow**. Nothing happens until you choose, and only a real click counts, so the page itself can't answer. You can also answer from the popup or the side panel.
+
+![Status panel: "Claude Code wants to click button “Pay invoice”. Nothing happens until you choose." with Deny and Allow](docs/page-pill-confirm.png)
+
+If you decline, the agent gets an error telling it not to retry. A tool call waits up to 45 seconds, because agents give up on longer calls; the question stays on screen for five minutes, and the agent's next identical call picks up your answer. The check reads button and form labels only, so it is predictable: cookie banners and a plain "Cancel" don't trigger it.
+
+Each site can be set from the popup to ask before risky actions (the default), before every action, or never. **Ask before risky actions** in settings turns the default off everywhere.
+
+### The side panel
+
+**Side panel** in the popup opens a panel beside the page that stays open while you work. It lists every shared tab with Pause, Resume and Stop, puts any question waiting for you at the top, and keeps a running log of what agents did and what you answered, in the page's own words ("clicked button “Export CSV”"). The log lasts until the browser closes.
+
+![Side panel: a question waiting for Allow or Deny, the shared tab, and the activity log](docs/panel.png)
 
 ### Reading and acting
 
@@ -274,7 +292,7 @@ Ask for something like "tell me when this drops below 2,000" or "when the result
 Tether's settings page (popup, then **Settings**) has:
 
 - Connection: pairing key and port (Chromium only; Firefox doesn't need them).
-- Agent sessions: let agents ask to start a session; ask before an agent opens its own window; show the agent's cursor; play sounds; show the status panel on pages.
+- Agent sessions: let agents ask to start a session; ask before an agent opens its own window; ask before risky actions; show the agent's cursor; play sounds; show the status panel on pages.
 - Real input (Chromium): use the debugger for clicks, typing and network capture.
 - Recording: record what you type; sites recorded automatically.
 - Gallery: every style and script by site, with switches, Download, Publish and Delete.
@@ -302,6 +320,7 @@ The extension asks for broad permissions so pages can't stop the agent from doin
 | `cookies`, `downloads`, `notifications` | The cookies tool; download paths; watcher alerts |
 | `nativeMessaging` (Firefox) | The bridge the browser starts |
 | `tabs`, `webNavigation`, `storage`, `alarms` | Tracking shared tabs and reconnecting after the browser suspends the extension |
+| `sidePanel` (Chromium) | The side panel (Firefox uses its sidebar, which needs no permission) |
 
 Security:
 
@@ -309,7 +328,7 @@ Security:
 - Agents and Chromium extensions need the pairing key from `~/.tether/config.json`; `tether key --new` replaces it. Firefox's bridge reads it locally.
 - The host accepts WebSocket connections only from browser-extension origins, and the extension never takes commands from web pages.
 - Anyone who can run programs as your user can read the key and drive shared tabs. Treat sharing a tab like handing someone your mouse.
-- Agents are told to ask before paying, sending messages or deleting things. That is an instruction to the model, not something Tether enforces, so watch the status panel when it matters.
+- Agents are told to ask before paying, sending messages or deleting things, and Tether also enforces it: clicks on buttons with those labels wait for your Allow. The check goes by labels, so a button named something unexpected ("Continue" on a checkout page) won't be caught. For sites where that matters, set the site to ask before every action, or share it read only.
 
 What sites can see: the status panel and cursor live in a closed shadow root, the outline code runs in the extension's isolated world, and nothing is added to the page's own JavaScript unless a script is run there. Tether doesn't spoof fingerprints or try to defeat bot detection; agent-paced browsing can still look automated, and some sites' terms forbid automation.
 
@@ -348,15 +367,16 @@ tether install-native [--chrome-id <id>]   # register the bridge again
 
 ```
 host/        cli.js, shim.js (stdio bridge for agents), daemon.js (HTTP + WebSocket), hub.js,
-             tools.js, native.js and install-native.js (Firefox bridge), scripts.js (userscript and
+             tools.js, annotations.js (title and MCP hints per tool), native.js and install-native.js (Firefox bridge), scripts.js (userscript and
              UserCSS files), sites.js (recordings), requests.js, media.js, watchers.js, gallery.js,
              doctor.js, config.js
 extension/   background.js, content.js (outline, actions, cursor, status panel, recorder, picker),
              motion.js (springs, in-place rendering), toast-stack.js, sounds.js, ui.css,
-             popup/, options/, prompt/, offscreen/ (plays alert sounds in Chromium), fonts/
+             popup/, panel/ (side panel), options/, prompt/, offscreen/ (plays alert sounds in
+             Chromium), fonts/
 scripts/     build-ext.js (dist/chrome, dist/firefox), make-icons.js
 skills/      tether-browser, the agent skill
-test/        e2e.mjs, features.mjs, shots.mjs
+test/        tools.mjs (no browser), e2e.mjs, features.mjs, safety.mjs, shots.mjs
 ```
 
 ```sh
@@ -368,7 +388,7 @@ npm run sign:firefox    # signed unlisted .xpi (needs the AMO API key)
 npm run doctor
 ```
 
-The tests load the built extension into Playwright's Chromium, serve test pages, connect an MCP client through the stdio shim and drive every tool: sharing, the outline, forms, real clicks, network and console capture, sessions, bypass, pausing, cross-origin iframes, media, downloads, picked elements, requests, styles and scripts, recording and the site map, watchers, gallery screenshots and sharing that survives an extension reload. `--fallback` repeats a suite without the debugger, which is the path Firefox takes. Firefox itself is checked with `npx web-ext lint -s dist/firefox`.
+The tests load the built extension into Playwright's Chromium, serve test pages, connect an MCP client through the stdio shim and drive every tool: sharing, the outline, forms, real clicks, network and console capture, sessions, bypass, pausing, cross-origin iframes, media, downloads, picked elements, requests, styles and scripts, recording and the site map, watchers, gallery screenshots, sharing that survives an extension reload, read-only tabs, Allow and Deny from the page, popup and side panel, and the per-site ask setting. `tools.mjs` checks every tool's annotations without a browser. `--fallback` repeats a suite without the debugger, which is the path Firefox takes. Firefox itself is checked with `npx web-ext lint -s dist/firefox`.
 
 ## Known limits
 

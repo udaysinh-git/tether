@@ -25,23 +25,27 @@ export function registerTools(server, hub, agentName) {
       }
     });
 
+  // Actions can wait for the user to press Allow on the page (up to two
+  // minutes), so they get a longer timeout than reads.
+  const ACT_MS = 150000;
+
   // After an action, return a fresh snapshot so the agent rarely needs a second call.
-  const act = async (args, method, params, summary, timeout) => {
+  const act = async (args, method, params, summary, timeout = ACT_MS, tool = method) => {
     const { handle } = hub.resolveTab(args.tab);
-    hub.activity(agentName(), method, handle, summary);
-    const res = await hub.callTab(handle, method, params, timeout);
+    hub.activity(agentName(), tool, handle, summary);
+    const res = await hub.callTab(handle, method, { ...params, agent: agentName() }, Math.max(timeout, ACT_MS));
     const snap = await hub.callTab(handle, "snapshot", { maxLines: 250 }).catch(() => null);
     return text([res?.note, snap?.text].filter(Boolean).join("\n\n") || "Done.");
   };
 
   tool(
     "list_tabs",
-    "List the browser tabs you can use. Normally these are the tabs the user shared by clicking Tether, plus tabs you or those pages opened. If the user has turned on bypass mode, every tab is listed.",
+    "List the browser tabs you can use. Normally these are the tabs the user shared by clicking Tether, plus tabs you or those pages opened. If the user has turned on bypass mode, every tab is listed. Tabs marked read only can be read (snapshot, read_text, screenshot, network, console) but every action on them fails.",
     {},
     async () => {
       const tabs = hub.allTabs();
       if (!tabs.length) return text(hub.browsers.size ? NO_TABS : NO_BROWSER);
-      const line = (t) => `${t.tab}${t.active ? " (active)" : ""}  ${t.title || "(untitled)"}\n    ${t.url}`;
+      const line = (t) => `${t.tab}${t.active ? " (active)" : ""}${t.readOnly ? " (read only: you can read it but not act)" : ""}  ${t.title || "(untitled)"}\n    ${t.url}`;
       const shared = tabs.filter((t) => t.shared !== false);
       const rest = tabs.filter((t) => t.shared === false);
       let out = shared.length ? "Shared tabs:\n" + shared.map(line).join("\n") : "No tab is shared yet.";
@@ -67,7 +71,7 @@ export function registerTools(server, hub, agentName) {
   tool("close_tab", "Close a shared tab.", { tab }, async (a) => {
     const { browser, tabId, handle } = hub.resolveTab(a.tab);
     hub.activity(agentName(), "close_tab", handle, "closed the tab");
-    await hub.call(browser, "closeTab", { tabId });
+    await hub.call(browser, "closeTab", { tabId, agent: agentName() }, ACT_MS);
     return text(`Closed ${handle}`);
   });
 
@@ -75,7 +79,7 @@ export function registerTools(server, hub, agentName) {
     "navigate",
     "Go to a URL in a shared tab, or go back, forward or reload.",
     { tab, url: z.string().optional(), action: z.enum(["back", "forward", "reload"]).optional() },
-    (a) => act(a, "navigate", { url: a.url, action: a.action }, a.url ? `went to ${short(a.url)}` : a.action, 45000)
+    (a) => act(a, "navigate", { url: a.url, action: a.action }, a.url ? `went to ${short(a.url)}` : a.action)
   );
 
   tool(
@@ -96,13 +100,13 @@ export function registerTools(server, hub, agentName) {
     async (a) => text((await hub.callTab(a.tab, "readText", { ref: a.ref, maxChars: a.maxChars ?? 20000 })).text)
   );
 
-  tool("click", "Click an element.", { tab, ref, double: z.boolean().optional() }, (a) => act(a, "click", { ref: a.ref, double: a.double }, `clicked ${a.ref}`));
+  tool("click", "Click an element. If it looks like it buys, pays, sends, posts or deletes, the user is asked to allow it on the page first and the call waits (up to two minutes); if they decline, the call fails and you should not retry.", { tab, ref, double: z.boolean().optional() }, (a) => act(a, "click", { ref: a.ref, double: a.double }, `clicked ${a.ref}`));
 
   tool("hover", "Move the pointer over an element, e.g. to open a menu.", { tab, ref }, (a) => act(a, "hover", { ref: a.ref }, `hovered ${a.ref}`));
 
   tool(
     "type",
-    "Type into a text field or editable area. Replaces the current value unless append is true.",
+    "Type into a text field or editable area. Replaces the current value unless append is true. With submit, a form whose button buys, sends, posts or deletes waits for the user to allow it.",
     { tab, ref, text: z.string(), append: z.boolean().optional(), submit: z.boolean().optional().describe("Press Enter afterwards.") },
     (a) => act(a, "type", { ref: a.ref, text: a.text, append: a.append, submit: a.submit }, `typed into ${a.ref}`)
   );
@@ -111,21 +115,21 @@ export function registerTools(server, hub, agentName) {
     "fill_form",
     "Fill several fields at once. Text fields take a string, checkboxes and radios take true or false, selects take the option label or value.",
     { tab, fields: z.array(z.object({ ref, value: z.union([z.string(), z.boolean(), z.number()]) })) },
-    (a) => act(a, "fill", { fields: a.fields }, `filled ${a.fields.length} field${a.fields.length === 1 ? "" : "s"}`)
+    (a) => act(a, "fill", { fields: a.fields }, `filled ${a.fields.length} field${a.fields.length === 1 ? "" : "s"}`, ACT_MS, "fill_form")
   );
 
   tool(
     "select_option",
     "Choose one or more options in a select element, by label or value.",
     { tab, ref, values: z.array(z.string()) },
-    (a) => act(a, "select", { ref: a.ref, values: a.values }, `picked ${a.values.join(", ")}`)
+    (a) => act(a, "select", { ref: a.ref, values: a.values }, `picked ${a.values.join(", ")}`, ACT_MS, "select_option")
   );
 
   tool(
     "press_key",
     'Press a key, optionally on an element. Examples: "Enter", "Escape", "Tab", "ArrowDown", "Control+a".',
     { tab, key: z.string(), ref: ref.optional() },
-    (a) => act(a, "press", { key: a.key, ref: a.ref }, `pressed ${a.key}`)
+    (a) => act(a, "press", { key: a.key, ref: a.ref }, `pressed ${a.key}`, ACT_MS, "press_key")
   );
 
   tool(
@@ -164,7 +168,7 @@ export function registerTools(server, hub, agentName) {
     async (a) => {
       const { handle } = hub.resolveTab(a.tab);
       hub.activity(agentName(), "run_js", handle, "ran a script");
-      const res = await hub.callTab(handle, "runJs", { code: a.code });
+      const res = await hub.callTab(handle, "runJs", { code: a.code, agent: agentName() }, ACT_MS);
       return text(res.value === undefined ? "undefined" : JSON.stringify(res.value, null, 2));
     }
   );
@@ -179,7 +183,7 @@ export function registerTools(server, hub, agentName) {
         if (data.length > 25 * 1024 * 1024) throw new Error(`${p} is over 25 MB`);
         return { name: path.basename(p), data: data.toString("base64"), type: mime(p) };
       });
-      return act(a, "upload", { ref: a.ref, files }, `attached ${files.map((f) => f.name).join(", ")}`, 60000);
+      return act(a, "upload", { ref: a.ref, files }, `attached ${files.map((f) => f.name).join(", ")}`, ACT_MS, "upload_file");
     }
   );
 
@@ -451,7 +455,7 @@ export function registerTools(server, hub, agentName) {
       if (!s) throw new Error(`No script called ${a.name}`);
       const { handle } = hub.resolveTab(a.tab);
       hub.activity(agentName(), "run_script", handle, `ran ${s.name}`);
-      const res = await hub.callTab(handle, "runItem", { id: s.id });
+      const res = await hub.callTab(handle, "runItem", { id: s.id, agent: agentName() }, ACT_MS);
       return text(res.value === undefined ? `Ran ${s.name}.` : JSON.stringify(res.value, null, 2));
     }
   );

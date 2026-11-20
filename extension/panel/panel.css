@@ -1,0 +1,52 @@
+/* The side panel: the same lamp-switch world as the popup, laid out for a
+   tall, narrow column that stays open. What needs the user sits at the top. */
+html, body { height: 100%; }
+body { display: flex; flex-direction: column; min-width: 280px; }
+
+header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px 10px; }
+h1 { font-size: 15.5px; font-weight: 700; letter-spacing: -0.02em; }
+.status { display: flex; align-items: center; gap: 8px; min-width: 0; color: var(--text-2); font-size: 12.5px; }
+.status span:last-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+main { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 14px; padding: 0 12px 12px; }
+.stack { display: grid; gap: 10px; grid-template-columns: minmax(0, 1fr); }
+.stack:empty { display: none; }
+
+.card { background: var(--card); border-radius: var(--radius); box-shadow: inset 0 0 0 1px var(--line); padding: 14px; display: grid; gap: 10px; }
+.ask-card { box-shadow: inset 0 0 0 1px rgb(212 175 55 / 0.55); }
+.ask-card .head { display: flex; gap: 8px; align-items: flex-start; font-weight: 500; }
+.ask-card .head .dot { margin-top: 6px; }
+.ask-card .where { color: var(--text-3); font-size: 12.5px; padding-left: 16px; }
+.actions { display: flex; gap: 8px; }
+.actions button { flex: 1; }
+
+.section { display: grid; gap: 2px; grid-template-columns: minmax(0, 1fr); }
+.section h2 { font-size: 12.5px; font-weight: 500; color: var(--text-3); padding: 0 4px 6px; display: flex; justify-content: space-between; align-items: center; }
+
+.tab { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 6px 8px; border-radius: 12px; transition: background-color 0.15s; }
+.tab:hover { background: var(--card); }
+.tab img, .tab .fav { flex: none; width: 16px; height: 16px; border-radius: 4px; background: var(--raised); }
+.tab .grow { flex: 1; min-width: 0; }
+.tab .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+.tab .name:hover { text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: 3px; }
+.tab .sub { color: var(--text-3); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tag { display: inline-block; padding: 0 6px; margin-right: 4px; border-radius: 6px; background: var(--raised); color: var(--text-2); font-size: 11.5px; }
+.tag.gold { background: var(--gold-soft); color: var(--gold); }
+.tab .btns { flex: none; display: flex; gap: 2px; }
+
+.feed-section { flex: 1; min-height: 120px; grid-template-rows: auto 1fr; }
+.feed { list-style: none; margin: 0; padding: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; }
+.feed li { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px; padding: 6px 8px; border-radius: 10px; }
+.feed li:hover { background: var(--card); }
+.feed time { color: var(--text-3); font-size: 12px; padding-top: 1px; white-space: nowrap; min-width: 52px; }
+.feed .line { min-width: 0; overflow-wrap: anywhere; }
+.feed .who { font-weight: 500; }
+.feed .where { display: block; color: var(--text-3); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.feed li.user .who { color: var(--text-2); }
+.feed li.ask .who, .feed li.allow .who { color: var(--gold); }
+.feed li.deny .who { color: var(--danger); }
+.feed .empty { display: block; color: var(--text-3); padding: 6px 8px; }
+
+.empty-card p + p { margin-top: 4px; }
+
+footer { display: flex; justify-content: space-between; align-items: center; padding: 10px 16px 14px; border-top: 1px solid var(--line); }

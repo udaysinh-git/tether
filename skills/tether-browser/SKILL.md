@@ -51,6 +51,8 @@ Clicks and keys arrive as real input in Chromium browsers, so sites treat them l
 
 - A CAPTCHA, a login, a 2FA or OTP code, a payment confirmation, or any choice that is theirs: call `wait_for_user` with a one-sentence `message`. The tab comes to the front with your message and a Done button, and the call returns when they press it (default wait 5 minutes). Then continue from the snapshot it returns.
 - If an action fails with "The user paused this tab", they pressed Pause to do something themselves. Call `wait_for_user` without a message to wait for Resume. Don't retry the action in a loop.
+- A click on a button that buys, pays, sends, posts or deletes (or Enter in such a form) waits for the user to press Allow on the page. If the call says they haven't answered yet, repeat the exact same call to keep waiting. If they declined, don't retry; ask in chat. Some sites are set to ask before every action.
+- A tab marked "read only" in `list_tabs` can be read but not acted on. If the task needs actions there, ask the user to switch it to full control in the Tether popup.
 
 ## Files, media and downloads
 
@@ -121,4 +123,8 @@ Files are standard `.user.js` userscripts and `.user.css` UserCSS, so they also 
 | …security policy blocks run_js | Firefox: reload the tab once and retry. Chromium: the user turned off real input in Tether settings |
 | … timed out | The page is slow or stuck. `screenshot` to see why |
 | The user paused this tab | `wait_for_user` without a message |
+| The user hasn't answered yet | Repeat the same call to keep waiting for Allow |
+| The user declined | Don't retry; ask in chat |
+| The user shared this tab read only | Read only; ask them for full control if you need to act |
+| The user is still deciding | Repeat the call that asked, or wait for it to return |
 | Anything about setup | Ask the user to run `node host/cli.js doctor` in the tether folder |

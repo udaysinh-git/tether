@@ -275,6 +275,55 @@
     flash(el);
   }
 
+  // ------------------------------------------------------------ risky actions
+  // Before a click (or Enter in a form) the background asks whether it looks
+  // like something that can't be taken back: buying, paying, sending, posting,
+  // deleting. If so, the user is asked first. Words only, so it's predictable;
+  // cookie banners ("Accept") and plain "Cancel" don't count.
+  const RISKY = /\b(buy|pay|payment|purchase|checkout|check out|place (an |my |your )?order|order now|confirm|send|post|publish|tweet|retweet|repost|reply|comment|submit|delete|remove|erase|destroy|discard|trash|transfer|withdraw|donate|tip|subscribe|unsubscribe|book|reserve|approve|deactivate|close (my |your )?account|cancel (my |your |the )?(subscription|order|booking|plan|account|membership)|merge|deploy|sign out|log ?out|archive|block|unfollow|leave|share|invite|upgrade|downgrade|renew)\b/i;
+  const CLICKABLE = 'button, a[href], [role="button"], [role="link"], [role="menuitem"], input[type="submit"], input[type="button"], input[type="image"], summary';
+
+  function riskText(el) {
+    return [nameOf(el), el.value && el.tagName === "INPUT" ? el.value : "", el.getAttribute("title") || "", el.getAttribute("aria-label") || ""].join(" ");
+  }
+
+  async function risk({ ref, kind }) {
+    const el = byRef(ref);
+    let target = el.closest?.(CLICKABLE) || el;
+    if (kind === "submit") {
+      const form = el.form || el.closest("form");
+      const sub = form?.querySelector('button[type="submit"], input[type="submit"], button:not([type])');
+      if (!form) return { risky: false, what: label(el) };
+      target = sub || form;
+      const hay = sub ? riskText(sub) : `${form.getAttribute("aria-label") || ""} ${form.getAttribute("name") || ""}`;
+      const m = RISKY.exec(hay);
+      if (m) await hold(target);
+      return { risky: !!m, what: sub ? label(sub) : "the form", reason: m ? m[0].toLowerCase() : "" };
+    }
+    const m = RISKY.exec(riskText(target));
+    if (m) await hold(target);
+    return { risky: !!m, what: label(target), reason: m ? m[0].toLowerCase() : "" };
+  }
+
+  // Keep the element outlined and the cursor on it while the user decides.
+  let held = null;
+  async function hold(el) {
+    if (!IS_TOP) return;
+    el.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    await moveCursor(el);
+    held = el; // outlined once the question itself arrives (placeHeld)
+  }
+  function placeHeld() {
+    if (!hl) return;
+    if (!held?.isConnected || !confirm) { hl.classList.remove("hold"); held = null; return; }
+    const r = held.getBoundingClientRect();
+    Object.assign(hl.style, { left: r.left - 4 + "px", top: r.top - 4 + "px", width: r.width + 8 + "px", height: r.height + 8 + "px" });
+    hl.classList.add("hold");
+  }
+  addEventListener("scroll", () => held && placeHeld(), { passive: true, capture: true });
+  addEventListener("resize", () => held && placeHeld());
+
   // ------------------------------------------------------------ agent cursor
   // A visible pointer with the agent's name glides to each element before the
   // agent acts on it, so the user can follow along. Off in settings, and it
@@ -701,6 +750,13 @@
           transition: opacity .6s cubic-bezier(.22, 1, .36, 1);
         }
         .hl.on { opacity: 1; transition: none; }
+        .hl.hold { opacity: 1; box-shadow: 0 0 0 2px #d4af37, 0 0 0 6px rgb(212 175 55 / .22); transition: opacity .2s; }
+        .pill.ask button.deny { background: #2d2d2d; }
+        .pill.confirm .btns { flex-direction: row-reverse; align-self: center; }
+        .pill.confirm .in { max-width: 440px; }
+        .pill.ask .t { white-space: normal; text-wrap: pretty; }
+        .pill.confirm .lines { flex: 1 1 auto; min-width: 250px; }
+        .pill.ask .why { color: #a9a6a0; }
         .cur { position: fixed; left: 0; top: 0; pointer-events: none; opacity: 0; z-index: 2; will-change: transform; transition: opacity .2s; }
         .cur.on { opacity: 1; }
         .cur .body { transform-origin: 2px 2px; transition: scale .5s cubic-bezier(.28, 1.4, .36, 1); }
@@ -740,11 +796,20 @@
     pillSub = pillRoot.querySelector(".s");
     hl = pillRoot.querySelector(".hl");
     const ring = (name, opts) => api.runtime.sendMessage({ type: "ring", name, opts }).catch(() => {});
-    pillRoot.querySelector("button.stop").addEventListener("click", () => { ring("hush"); api.runtime.sendMessage({ type: "stop" }); });
+    // While the agent is asking to do something, the two buttons are Deny and
+    // Allow. Only a real click counts, so nothing on the page can answer.
+    pillRoot.querySelector("button.stop").addEventListener("click", (e) => {
+      if (!e.isTrusted) return;
+      if (confirm) { ring("hush"); api.runtime.sendMessage({ type: "confirmAnswer", id: confirm.id, allow: false }); return; }
+      ring("hush");
+      api.runtime.sendMessage({ type: "stop" });
+    });
     makeDraggable(pillRoot.querySelector(".pill"));
     pillRoot.querySelector(".pill").title = "Drag to move. Double-click to put it back in the corner.";
     // Pause, Resume, or Done when the agent asked for help.
-    pillRoot.querySelector("button.act").addEventListener("click", () => {
+    pillRoot.querySelector("button.act").addEventListener("click", (e) => {
+      if (!e.isTrusted) return;
+      if (confirm) { ring("paid"); api.runtime.sendMessage({ type: "confirmAnswer", id: confirm.id, allow: true }); return; }
       ring(!paused ? "drape" : paused.by === "agent" ? "paid" : "float");
       api.runtime.sendMessage({ type: paused ? "resume" : "pause" });
     });
@@ -756,6 +821,8 @@
   let shared = false;
   let recording = false;
   let paused = null; // { by: "user" | "agent", agent, message }
+  let confirm = null; // { id, agent, action, reason } while the agent waits for Allow or Deny
+  let mode = "full"; // "read" when the user shared this tab read only
 
   const ISLAND = "linear(0, 0.046, 0.137, 0.252, 0.377, 0.501, 0.616, 0.717, 0.804, 0.874, 0.93, 0.976, 1.005, 1.024, 1.035, 1.04, 1.041, 1.04, 1.036, 1.031, 1.026, 1.02, 1.015, 1.011, 1.008, 1.005, 1.003, 1.001, 1, 0.999, 0.999, 0.998, 0.998, 0.998, 0.999, 0.999, 0.999, 0.999, 0.999, 1, 1)";
   const POP = "linear(0, 0.096, 0.292, 0.534, 0.774, 0.977, 1.137, 1.22, 1.248, 1.233, 1.188, 1.13, 1.064, 1.012, 0.973, 0.949, 0.939, 0.941, 0.951, 0.966, 0.981, 0.994, 1.005, 1.012, 1.015, 1.015, 1.013, 1.009, 1.006, 1.002, 0.999, 0.997, 0.996, 0.996, 0.997, 0.998, 0.998, 0.999, 1, 1.001, 1)";
@@ -768,10 +835,22 @@
     const before = pill.classList.contains("off") || !pill.getClientRects().length ? null : pill.getBoundingClientRect();
     const beforeRadius = getComputedStyle(pill).borderTopLeftRadius;
     const wasAsk = pill.classList.contains("ask");
-    pill.classList.toggle("off", !showPill && !(shared && paused?.by === "agent"));
-    pill.classList.toggle("ask", !!(paused && paused.by === "agent"));
-    act.hidden = !shared;
-    if (shared && paused?.by === "agent") {
+    const stop = pillRoot.querySelector("button.stop");
+    const asking = !!(shared && confirm);
+    pill.classList.toggle("off", !showPill && !(shared && (paused?.by === "agent" || confirm)));
+    pill.classList.toggle("ask", asking || !!(paused && paused.by === "agent"));
+    pill.classList.toggle("confirm", asking);
+    pill.setAttribute("role", asking ? "alertdialog" : "status");
+    act.hidden = !shared || (mode === "read" && !paused && !asking);
+    stop.textContent = asking ? "Deny" : "Stop";
+    stop.title = asking ? "Don't let the agent do this" : "Stop sharing and recording this tab";
+    stop.classList.toggle("deny", asking);
+    if (asking) {
+      pillText.textContent = `${confirm.agent || "Your agent"} wants to ${confirm.action}`;
+      pillSub.textContent = "Nothing happens until you choose.";
+      act.textContent = "Allow";
+      act.title = "Let the agent go ahead";
+    } else if (shared && paused?.by === "agent") {
       pillText.textContent = `${paused.agent || "Your agent"} needs you`;
       pillSub.textContent = paused.message || "Take care of this page, then press Done.";
       act.textContent = "Done";
@@ -782,7 +861,8 @@
       act.textContent = "Resume";
       act.title = "Let the agent continue";
     } else if (shared) {
-      pillText.textContent = (agents.length ? `Shared with ${agents.join(" and ")}` : "Shared, waiting for an agent") + (recording ? " · recording" : "");
+      const how = mode === "read" ? "Read only" : "Shared";
+      pillText.textContent = (agents.length ? `${how} with ${agents.join(" and ")}` : `${how}, waiting for an agent`) + (recording ? " · recording" : "");
       pillSub.textContent = lastActivity;
       act.textContent = "Pause";
       act.title = "Hold the agent while you do something here";
@@ -1251,7 +1331,7 @@
 
   // ------------------------------------------------------------ wiring
 
-  const handlers = { snapshot, readText, locate, focusFor, click, hover, type, fill, select, press, scroll, waitFor, upload, listMedia, mediaRead, videoFrame };
+  const handlers = { snapshot, readText, locate, focusFor, click, hover, type, fill, select, press, scroll, waitFor, upload, listMedia, mediaRead, videoFrame, risk };
 
   api.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg.agents) agents = msg.agents;
@@ -1280,9 +1360,25 @@
         updatePill();
         sendResponse({ ok: true });
         return;
+      case "confirm":
+        confirm = msg.confirm || null;
+        if (!IS_TOP) { sendResponse({ ok: true }); return; }
+        shared = true;
+        updatePill();
+        placeHeld();
+        // Allow is never focused for you: a stray Enter mustn't approve anything.
+        sendResponse({ ok: true });
+        return;
+      case "mode":
+        mode = msg.mode === "read" ? "read" : "full";
+        updatePill();
+        sendResponse({ ok: true });
+        return;
       case "unshared":
         shared = false;
         paused = null;
+        confirm = null;
+        placeHeld();
         updatePill();
         sendResponse({ ok: true });
         return;
@@ -1377,6 +1473,8 @@
     if (s.activity) lastActivity = `${s.activity.agent} ${s.activity.summary}`;
     shared = !!s.shared;
     paused = s.paused || null;
+    confirm = s.confirm || null;
+    mode = s.mode || "full";
     if (!IS_TOP) return;
     if (s.recording) startRecording(s.recording);
     else updatePill();

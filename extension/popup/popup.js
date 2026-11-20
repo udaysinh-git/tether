@@ -7,6 +7,7 @@ const app = document.getElementById("app");
 const statusEl = document.getElementById("status");
 
 let tabId = null;
+let winId = null;
 let st = null;
 let pairError = "";
 let scriptResult = null;
@@ -74,19 +75,38 @@ function tabCard() {
   }
 
   if (!t.shared) {
-    const hint = st.bypass ? "Bypass mode is on, so agents can already reach this tab." : "Agents can read and use this tab, and any tab it opens, until you stop.";
+    const hint = st.bypass ? "Bypass mode is on, so agents can already reach this tab." : "Agents can read and use this tab, and any tab it opens, until you stop. Read only lets them look without clicking or typing.";
     return `
       <section class="card" data-morph="tab">
         ${page}
-        <button class="primary share" data-act="share">Share this tab</button>
+        <div class="share-row">
+          <button class="primary share" data-act="share">Share this tab</button>
+          <button class="share-read" data-act="shareRead" title="Agents can read the page but not click, type or run scripts">Read only</button>
+        </div>
         <p class="faint">${hint}</p>
+      </section>`;
+  }
+
+  if (t.confirming) {
+    const c = t.confirming;
+    return `
+      <section class="card ask-card" data-morph="tab">
+        ${page}
+        <div class="live">
+          <p class="head" data-rise><span class="dot live-dot"></span>${esc(c.agent)} wants to ${esc(c.action)}</p>
+          <p class="what" data-rise>Nothing happens until you choose.</p>
+        </div>
+        <div class="row-actions">
+          <button data-act="deny" data-cid="${esc(c.id)}">Deny</button>
+          <button class="primary" data-act="allow" data-cid="${esc(c.id)}">Allow</button>
+        </div>
       </section>`;
   }
 
   const who = st.agents.length ? joinNames(st.agents) : "Your agent";
   const a = t.activity;
   const what = a ? `${esc(a.agent)} ${esc(a.summary)} <span class="faint" data-ago="${a.at}">· ${ago(a.at)}</span>` : st.agents.length ? "No actions yet." : "Start Claude Code or Codex with Tether added, and it can pick this tab up.";
-  let how = t.by === "bypass" ? "Joined through bypass mode" : t.by === "opener" ? "Opened by a shared tab" : t.by === "agent" ? "Opened by the agent" : `${esc(who)} can use this tab`;
+  let how = t.by === "bypass" ? "Joined through bypass mode" : t.by === "opener" ? "Opened by a shared tab" : t.by === "agent" ? "Opened by the agent" : `${esc(who)} can ${t.mode === "read" ? "read" : "use"} this tab`;
   let detail = what;
   if (t.paused?.by === "agent") { how = `${esc(t.paused.agent || who)} needs you on this page`; detail = esc(t.paused.message || ""); }
   else if (t.paused) { how = "Paused"; detail = `${esc(who)} will wait until you resume.`; }
@@ -101,7 +121,31 @@ function tabCard() {
         <button data-act="${t.paused ? "resume" : "pause"}" ${t.paused?.by === "agent" ? 'class="primary"' : ""}>${t.paused?.by === "agent" ? "Done" : t.paused ? "Resume" : "Pause"}</button>
         <button data-act="unshare" data-id="${t.id}">Stop sharing</button>
       </div>
+      <div class="toggle-row flush">
+        <div class="grow">
+          <p>Read only</p>
+          <p class="faint">${t.mode === "read" ? "Agents can look at this tab but can't click, type or run scripts." : "Agents can click, type and run scripts here."}</p>
+        </div>
+        <button class="switch small" role="switch" aria-checked="${t.mode === "read"}" aria-label="Read only" data-act="mode" data-on="${t.mode !== "read"}"></button>
+      </div>
     </section>`;
+}
+
+const ASK_LABELS = { risky: "Risky actions", all: "Every action", never: "Never" };
+function askRow() {
+  const t = st.tab;
+  if (!st.paired || !t?.shareable) return "";
+  const hint = { risky: "You allow or deny buttons that buy, pay, send, post or delete.", all: "You allow or deny every click, keystroke and script.", never: "Agents act without asking here." }[st.siteAsk];
+  return `
+    <div class="toggle-row ask-row">
+      <div class="grow">
+        <p>Ask first on this site</p>
+        <p class="faint">${hint}</p>
+      </div>
+      <div class="seg" role="radiogroup" aria-label="Ask first on ${esc(st.host)}">
+        ${Object.entries(ASK_LABELS).map(([v, l]) => `<button role="radio" aria-checked="${st.siteAsk === v}" data-act="siteAsk" data-value="${v}" title="${esc(l)}">${v === "risky" ? "Risky" : v === "all" ? "All" : "Never"}</button>`).join("")}
+      </div>
+    </div>`;
 }
 
 function othersSection() {
@@ -172,7 +216,7 @@ function footer() {
   const anything = st.tab?.shared || st.others.some((o) => o.shared !== false) || st.bypass;
   return `
     <footer>
-      <a href="#" data-act="options">Settings</a>
+      <span class="links"><a href="#" data-act="options">Settings</a>${st.hasPanel ? `<a href="#" data-act="panel" title="Watch what agents do as it happens">Side panel</a>` : ""}</span>
       ${anything ? `<button class="quiet" data-act="stopAll">Stop everything</button>` : ""}
     </footer>`;
 }
@@ -264,7 +308,7 @@ function render() {
   renderStatus();
   const err = st.conn === "denied" && st.connError ? `<p class="error" style="padding:0 4px">${esc(st.connError)}</p>` : "";
   patch(document.getElementById("top"), (st.paired ? tabCard() : pairCard()) + err + requestsSection());
-  patch(document.getElementById("rest"), othersSection() + stylesSection() + scriptsSection() + watchersSection() + recordSection() + (st.paired ? pillRow() + bypassRow() : "") + footer());
+  patch(document.getElementById("rest"), othersSection() + askRow() + stylesSection() + scriptsSection() + watchersSection() + recordSection() + (st.paired ? pillRow() + bypassRow() : "") + footer());
 }
 
 // ---------------------------------------------------------------- composer
@@ -390,13 +434,31 @@ app.addEventListener("click", async (e) => {
   try {
     switch (b.dataset.act) {
       case "share":
+      case "shareRead":
         // Firefox lets users withhold site access at install; ask on the first share.
         if (!(await api.permissions.contains({ origins: ["<all_urls>"] }))) {
           if (!(await api.permissions.request({ origins: ["<all_urls>"] }))) break;
         }
-        await send({ type: "share", tabId });
+        await send({ type: "share", tabId, mode: b.dataset.act === "shareRead" ? "read" : "full" });
         sound("landed");
         break;
+      case "allow":
+      case "deny":
+        await send({ type: "confirmAnswer", tabId, id: b.dataset.cid, allow: b.dataset.act === "allow" });
+        sound(b.dataset.act === "allow" ? "paid" : "hush");
+        break;
+      case "mode":
+        await send({ type: "setMode", tabId, mode: b.dataset.on === "true" ? "read" : "full" });
+        break;
+      case "siteAsk":
+        await send({ type: "setSiteAsk", host: st.host, value: b.dataset.value });
+        break;
+      case "panel":
+        // Both browsers only open their panel straight from a click, so no await before this.
+        Promise.resolve(api.sidePanel ? api.sidePanel.open({ windowId: winId }) : api.sidebarAction?.open())
+          .catch((err) => toast("Couldn't open the side panel", { tone: "bad", body: err.message }))
+          .then(() => setTimeout(() => window.close(), 50));
+        return;
       case "unshare":
         await send({ type: "unshare", tabId: id });
         sound("hush");
@@ -466,6 +528,7 @@ app.addEventListener("click", async (e) => {
 
 const [active] = await api.tabs.query({ active: true, currentWindow: true });
 tabId = active?.id ?? null;
+winId = active?.windowId ?? null;
 api.runtime.connect({ name: "popup" }).onMessage.addListener(() => refresh());
 await refresh();
 

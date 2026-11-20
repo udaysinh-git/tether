@@ -58,6 +58,15 @@ async function popup(name, setup, after) {
 await popup("unpaired");
 await sw.evaluate(() => chrome.storage.local.set({ key: "abcd-efgh-jkmn-pqrs", port: 47898 }));
 await popup("ready");
+const panelShot = async (name) => {
+  const pp = await ctx.newPage();
+  await pp.setViewportSize({ width: 360, height: 600 });
+  await pp.goto(`chrome-extension://${extId}/panel/panel.html`);
+  await wait(500);
+  await pp.screenshot({ path: path.join(out, `panel-${name}.png`) });
+  await pp.close();
+};
+await panelShot("empty");
 await popup("shared", async () => {
   await sw.evaluate(async (id) => {
     await share(id);
@@ -113,6 +122,40 @@ await sw.evaluate((id) => { resumeTab(id, true); pauseTab(id, { by: "user" }); }
 await wait(300);
 await tab.screenshot({ path: path.join(out, "page-pill-paused.png"), clip: { x: 500, y: 540, width: 500, height: 100 } });
 await sw.evaluate((id) => resumeTab(id, true), tabId);
+
+// The agent asks before a risky click: in the page, and in the popup.
+await sw.evaluate((id) => {
+  const c = { id: "c1", agent: "Claude Code", action: "click button “Pay invoice”", reason: "pay", since: Date.now() };
+  state.confirming.set(id, c);
+  return chrome.tabs.sendMessage(id, { cmd: "confirm", confirm: c }, { frameId: 0 });
+}, tabId);
+await wait(800);
+await tab.screenshot({ path: path.join(out, "page-pill-confirm.png"), clip: { x: 440, y: 500, width: 560, height: 140 } });
+await popup("confirm");
+// The side panel with that question and a short history.
+await sw.evaluate((id) => {
+  const t0 = Date.now() - 5 * 60000;
+  const title = "Quarterly invoices · Ledgerly";
+  state.feed = [
+    ["You", "user", "shared this tab"],
+    ["Claude Code", "act", "clicked link “March”"],
+    ["Claude Code", "act", "typed into textbox “Search invoices”"],
+    ["Claude Code", "act", "ran a script"],
+    ["Claude Code", "act", "clicked button “Export CSV”"],
+    ["Claude Code", "ask", "asked to click button “Pay invoice”"],
+  ].map(([agent, kind, text], i) => ({ tabId: id, agent, kind, text, at: t0 + i * 50000, host: "ledgerly.app", title }));
+}, tabId);
+await panelShot("ask");
+await sw.evaluate((id) => { state.confirming.delete(id); return chrome.tabs.sendMessage(id, { cmd: "confirm", confirm: null }, { frameId: 0 }); }, tabId);
+
+// Shared read only, with the per-site ask setting.
+await sw.evaluate((id) => setMode(id, "read"), tabId);
+await wait(300);
+await popup("read-only");
+await tab.bringToFront();
+await wait(300);
+await tab.screenshot({ path: path.join(out, "page-pill-read-only.png"), clip: { x: 500, y: 540, width: 500, height: 100 } });
+await sw.evaluate((id) => setMode(id, "full"), tabId);
 
 // Picker, mid-selection.
 await sw.evaluate((id) => startPick(id), tabId);

@@ -22,11 +22,13 @@ const targets = {
     ...base,
     minimum_chrome_version: "120",
     background: { service_worker: "background.js" },
-    permissions: ["offscreen", "tabs", "activeTab", "scripting", "storage", "unlimitedStorage", "debugger", "webRequest", "webNavigation", "cookies", "userScripts", "alarms", "downloads", "notifications"],
+    side_panel: { default_path: "panel/panel.html" },
+    permissions: ["offscreen", "tabs", "activeTab", "scripting", "storage", "unlimitedStorage", "debugger", "webRequest", "webNavigation", "cookies", "userScripts", "alarms", "downloads", "notifications", "sidePanel"],
   },
   firefox: {
     ...base,
     background: { scripts: ["sounds.js", "background.js"] },
+    sidebar_action: { default_panel: "panel/panel.html", default_title: "Tether", default_icon: icons, open_at_install: false },
     permissions: ["tabs", "activeTab", "scripting", "storage", "unlimitedStorage", "webRequest", "webRequestBlocking", "webNavigation", "cookies", "alarms", "nativeMessaging", "downloads", "notifications"],
     optional_permissions: ["userScripts"],
     // Firefox's MV3 default adds upgrade-insecure-requests, which turns the
