@@ -8,6 +8,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { loadConfig, safeEqual, setSetting } from "./config.js";
 import { Hub } from "./hub.js";
 import { registerTools } from "./tools.js";
+import { GROUPS } from "./annotations.js";
 import { watchAll, remove as removeItem } from "./scripts.js";
 import { startWatchers, setWatcherEnabled, runWatcher, getWatcher, deleteWatcher } from "./watchers.js";
 import { galleryIndex, shotOf, publishGist, forget } from "./gallery.js";
@@ -15,8 +16,30 @@ import { galleryIndex, shotOf, publishGist, forget } from "./gallery.js";
 const VERSION = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
 const IDLE_EXIT_MS = 30 * 60 * 1000;
 
-const AGENT_NAMES = { "claude-code": "Claude Code", "codex-mcp-client": "Codex", codex: "Codex", cursor: "Cursor", "gemini-cli": "Gemini CLI" };
-const prettyAgent = (n) => AGENT_NAMES[n] || AGENT_NAMES[String(n).toLowerCase()] || n || "Agent";
+const AGENT_NAMES = { "claude-code": "Claude Code", "codex-mcp-client": "Codex", codex: "Codex", cursor: "Cursor", opencode: "OpenCode", "gemini-cli": "Gemini CLI" };
+// Clients add suffixes to their name (cursor-vscode, opencode-cli), so match
+// on the part before the first dash too.
+const prettyAgent = (n) => {
+  const k = String(n || "").toLowerCase();
+  return AGENT_NAMES[k] || AGENT_NAMES[k.split(/[-_ ]/)[0]] || n || "Agent";
+};
+
+// What every agent is told when it connects. In lazy mode the tools outside
+// the core group are named here by group, so the agent knows they exist
+// without carrying their definitions.
+function instructions(mode) {
+  const more = Object.entries(GROUPS).filter(([g]) => g !== "core").map(([g, v]) => `${g} (${v.about})`).join("; ");
+  const lazy = mode === "lazy";
+  return [
+    "Tether gives you the user's real, logged-in browser tabs. Prefer it to a separate automated browser for anything the user would do in their own browser. You can only use tabs the user shared (and tabs those pages open), unless they approve bypass mode.",
+    "Start with list_tabs; if nothing is shared, call start_session, which opens your own window in their browser after they approve. Then snapshot to read the page and get element refs. Act with click, type, fill_form. Each action returns the page: the whole outline after a navigation, otherwise only the lines that changed, and refs on unchanged lines keep working.",
+    lazy
+      ? `You start with the everyday tools. The rest load when a task needs them: call load_tools with one of these groups: ${more}. Tether also tells you in a tool result when one is worth loading, for example when the user sends a change request from the popup or the site has saved flows.`
+      : "Use network_requests and console_messages to debug. The user can send you change requests (text and images) from the Tether popup: read them with get_requests. To restyle a site, preview with apply_css, check with screenshot, then save_style; use save_script for behaviour. Before working on a site, site_map shows what Tether recorded about how the user uses it, and run_flow replays a saved task in one call.",
+    "After finishing a task the user is likely to repeat on a site, offer to save it as a flow (save_flow) so next time is one call.",
+    "Ask in chat before submitting payments, sending messages or deleting anything; Tether also asks the user on the page before such clicks, and a declined action returns an error you should not retry. Some tabs are shared read only: you can read them but not act. Call end_session when you are done with your window.",
+  ].join(" ");
+}
 
 export async function serve({ quiet = false } = {}) {
   const cfg = loadConfig();
@@ -81,14 +104,12 @@ export async function serve({ quiet = false } = {}) {
           return;
         }
         entry = { name: "Agent" };
-        const mcp = new McpServer(
-          { name: "tether", version: VERSION },
-          {
-            instructions:
-              "Tether gives you the user's real, logged-in browser tabs. Prefer it to a separate automated browser for anything the user would do in their own browser. You can only use tabs the user shared (and tabs those pages open), unless they approve bypass mode. Start with list_tabs; if nothing is shared, call start_session, which opens your own window in their browser after they approve. Then snapshot to read the page and get element refs. Act with click, type, fill_form; each action returns a fresh snapshot. Use network_requests and console_messages to debug. The user can send you change requests (text and images) from the Tether popup: read them with get_requests. To restyle a site, preview with apply_css, check with screenshot, then save_style; use save_script for behaviour. Before working on a site, site_map shows what Tether recorded about how the user uses it. Ask in chat before submitting payments, sending messages or deleting anything; Tether also asks the user on the page before such clicks, and a declined action returns an error you should not retry. Some tabs are shared read only: you can read them but not act. Call end_session when you are done with your window.",
-          }
-        );
-        registerTools(mcp, hub, () => entry.name);
+        // The shim says how this agent wants its tools ("all" up front, or the
+        // default) and, after a host restart, which groups it had loaded.
+        const mode = req.headers["x-tether-tools"] === "all" ? "all" : "lazy";
+        const groups = String(req.headers["x-tether-groups"] || "").split(",").filter(Boolean);
+        const mcp = new McpServer({ name: "tether", version: VERSION }, { instructions: instructions(mode) });
+        registerTools(mcp, hub, () => entry.name, { mode, groups });
         const transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => randomUUID(),
           enableJsonResponse: true,

@@ -84,7 +84,7 @@ async function init() {
     try { await api.windows.get(w); state.agentWindows.add(w); } catch {}
   }
   const s = await settings();
-  state.standby = (!!s.key || IS_FIREFOX) && s.standby;
+  state.standby = s.paired && s.standby;
   if (active()) connect();
 }
 
@@ -95,13 +95,17 @@ const active = () => state.shared.size > 0 || state.bypass || state.recording.si
 const allowed = (tabId) => state.shared.has(tabId) || state.bypass;
 
 async function settings() {
-  const s = await api.storage.local.get(["key", "port", "trusted", "standby", "askWindow"]);
-  return { key: s.key || "", port: s.port || 47821, trusted: s.trusted !== false, standby: s.standby !== false, askWindow: s.askWindow !== false };
+  const s = await api.storage.local.get(["key", "port", "trusted", "standby", "askWindow", "native"]);
+  // native: reach the host through the bridge, which needs no key. Firefox
+  // always does. Chromium does unless a key was pasted, or the bridge turned
+  // out not to be registered (then it waits for the user to press Connect).
+  const native = IS_FIREFOX || (!s.key && s.native !== false);
+  return { key: s.key || "", native, paired: !!s.key || native, port: s.port || 47821, trusted: s.trusted !== false, standby: s.standby !== false, askWindow: s.askWindow !== false };
 }
 
 async function refreshStandby() {
   const s = await settings();
-  state.standby = (!!s.key || IS_FIREFOX) && s.standby;
+  state.standby = s.paired && s.standby;
   if (active()) connect();
 }
 
@@ -125,9 +129,11 @@ async function browserName() {
 
 // Firefox (and Zen, LibreWolf...) upgrades ws://127.0.0.1 to wss:// for MV3
 // extensions, so there the browser starts a native bridge (host/native.js)
-// and talks to it over native messaging. It also fills in the pairing key.
-const USE_NATIVE = IS_FIREFOX;
-const NATIVE_MISSING = "Tether's bridge isn't registered with this browser. Run “node host/cli.js install-native” in the tether folder, then reload the extension.";
+// and talks to it over native messaging. It also fills in the pairing key,
+// which is why Chromium browsers can use it too, to connect without one.
+const NATIVE_MISSING = IS_FIREFOX
+  ? "Tether's bridge isn't registered with this browser. Run “tether setup” in a terminal, then reload the extension."
+  : "Tether isn't set up on this computer yet. Run “npm install -g tether-browser” and then “tether setup” in a terminal, and press Connect again.";
 
 class NativeSocket {
   constructor() {
@@ -163,14 +169,15 @@ class NativeSocket {
 async function connect() {
   if (ws && (ws.readyState === 0 || ws.readyState === 1)) return;
   clearTimeout(retryTimer);
-  const { key, port } = await settings();
-  if (!key && !USE_NATIVE) return setConn("denied", "Add the pairing key to connect.");
+  const { key, port, native: USE_NATIVE } = await settings();
+  if (!key && !USE_NATIVE) return setConn("denied", "Press Connect in the Tether popup.");
+  if (USE_NATIVE && typeof api.runtime.connectNative !== "function") return nativeFailed();
   setConn("connecting");
   let sock;
   try {
     sock = USE_NATIVE ? new NativeSocket() : new WebSocket(`ws://127.0.0.1:${port}/ext`);
   } catch (e) {
-    if (USE_NATIVE) return setConn("denied", NATIVE_MISSING);
+    if (USE_NATIVE) return nativeFailed();
     return scheduleRetry();
   }
   ws = sock;
@@ -184,10 +191,21 @@ async function connect() {
     clearInterval(pingTimer);
     state.agents = [];
     if (e.code === 4003) return setConn("denied", "The pairing key doesn't match. Run “tether key” and paste the new one.");
-    if (e.code === 4404) return setConn("denied", NATIVE_MISSING);
+    if (e.code === 4404) return nativeFailed();
     if (active()) scheduleRetry();
     else setConn("off");
   };
+}
+
+// The bridge isn't registered (or doesn't list this extension). In Chromium
+// that puts the popup back on its Connect card, with the reason under it.
+async function nativeFailed() {
+  if (!IS_FIREFOX) {
+    await api.storage.local.set({ native: false });
+    // A key pasted while the bridge was being tried: use it.
+    if ((await settings()).key) return connect();
+  }
+  setConn("denied", NATIVE_MISSING);
 }
 
 function scheduleRetry() {
@@ -478,7 +496,7 @@ async function downloadUrl({ url, filename }) {
 // (a CAPTCHA, a 2FA code, a login) with wait_for_user and continue on Done.
 
 const pauseWaiters = new Map(); // tabId -> [resolve]
-const READ_ONLY = new Set(["snapshot", "readText", "network", "networkDetail", "console", "cookies", "waitUser", "listMedia", "mediaInfo", "mediaRead", "videoFrame", "downloads"]);
+const READ_ONLY = new Set(["snapshot", "readText", "network", "networkDetail", "console", "cookies", "waitUser", "listMedia", "mediaInfo", "mediaRead", "videoFrame", "downloads", "find"]);
 
 function pauseTab(tabId, info) {
   state.paused.set(tabId, { ...info, since: Date.now() });
@@ -498,7 +516,7 @@ function resumeTab(tabId, resumed = true) {
   broadcast();
 }
 
-async function waitUser(tabId, { agent, message, timeout = 300000 }) {
+async function waitUser(tabId, { agent, message, timeout = 300000, keep = false }) {
   if (message) {
     pauseTab(tabId, { by: "agent", agent, message });
     ring("beacon");
@@ -514,7 +532,8 @@ async function waitUser(tabId, { agent, message, timeout = 300000 }) {
     setTimeout(() => resolve(null), timeout);
   });
   if (resumed === null) {
-    if (message && state.paused.get(tabId)?.by === "agent") resumeTab(tabId, false);
+    // keep: the caller will come back with wait_for_user, so the message stays up.
+    if (message && !keep && state.paused.get(tabId)?.by === "agent") resumeTab(tabId, false);
     return { resumed: false, note: `The user hasn't responded after ${Math.round(timeout / 1000)}s.` };
   }
   if (!resumed) return { resumed: false, note: "The user stopped sharing the tab." };
@@ -523,11 +542,11 @@ async function waitUser(tabId, { agent, message, timeout = 300000 }) {
 
 // ---------------------------------------------------------------- read only + asking first
 // Actions that change a page. A read-only tab refuses them all.
-const ACTING = new Set(["click", "hover", "type", "fill", "select", "press", "upload", "runJs", "runItem", "previewCss", "navigate", "closeTab", "styleShots"]);
+const ACTING = new Set(["click", "clickAt", "hover", "type", "fill", "select", "press", "upload", "runJs", "runItem", "previewCss", "navigate", "closeTab", "styleShots"]);
 // Actions the user can be asked to allow first. Risky ones (a button that
 // buys, sends, posts or deletes; Enter in such a form) ask by default; a site
 // set to "every action" asks for all of these, and "never" trusts the site.
-const ASKABLE = new Set(["click", "type", "fill", "select", "press", "upload", "runJs", "runItem", "navigate", "closeTab"]);
+const ASKABLE = new Set(["click", "clickAt", "type", "fill", "select", "press", "upload", "runJs", "runItem", "navigate", "closeTab"]);
 // MCP clients give up on a tool call after about a minute (Codex's default is
 // 60 s), so one call waits at most WAIT_MS. The question stays on screen for
 // QUESTION_MS; calling the same action again picks it back up, and an answer
@@ -560,6 +579,7 @@ function shortUrl(url) {
 function describeAction(method, p, what) {
   switch (method) {
     case "click": return `click ${what || "an element"}`;
+    case "clickAt": return p.toX != null ? `drag across ${what || "the page"}` : `click ${what || "a point on the page"}`;
     case "type": return p.submit ? `type into ${what || "a field"} and submit the form` : `type into ${what || "a field"}`;
     case "fill": return `fill ${p.fields?.length || 0} field${p.fields?.length === 1 ? "" : "s"}`;
     case "select": return `choose ${(p.values || []).map((v) => `“${v}”`).join(", ")}`;
@@ -582,11 +602,12 @@ async function gate(tabId, method, p) {
     return;
   }
   let kind = null;
-  if (method === "click") kind = "click";
+  if (method === "click" || method === "clickAt") kind = "click";
   else if (method === "type" && p.submit) kind = "submit";
   else if (method === "press" && p.ref && /(^|\+)Enter$/i.test(p.key || "")) kind = "submit";
   let risk = null;
-  if (kind || (mode === "all" && p.ref)) {
+  if (method === "clickAt") risk = await riskAt(tabId, p.x, p.y);
+  else if (kind || (mode === "all" && p.ref)) {
     const fr = splitRef(p.ref);
     risk = await toContent(tabId, { cmd: "risk", ref: fr.ref, kind: kind || "click" }, true, fr.frameId).catch(() => null);
   }
@@ -596,12 +617,21 @@ async function gate(tabId, method, p) {
   }
   const what = kind === "submit" && risk?.risky ? `the form with ${risk.what}` : risk?.what;
   const action = kind === "submit" && risk?.risky ? `submit ${what}` : describeAction(method, p, what);
-  await confirmAction(tabId, p.agent, action, risk?.reason);
+  await confirmAction(tabId, p.agent, action, risk?.reason, p.askWaitMs);
+}
+
+// What is under a point, for click_at. A point inside another site's frame is
+// passed down to that frame, which is the only place it can be looked at.
+async function riskAt(tabId, x, y, frameId = 0, depth = 0) {
+  if (!depth) await prepareFrames(tabId).catch(() => {});
+  const r = await toContent(tabId, { cmd: "risk", x, y, kind: "click" }, true, frameId).catch(() => null);
+  if (r?.frame != null && depth < 4) return riskAt(tabId, r.x, r.y, r.frame, depth + 1);
+  return r;
 }
 
 const declined = (action) => new Error(`The user declined: ${action}. Don't retry it; ask them in chat if it still matters.`);
 
-async function confirmAction(tabId, agent, action, reason) {
+async function confirmAction(tabId, agent, action, reason, waitMs) {
   // Answered while the agent's previous call had already given up waiting.
   const done = answered.get(tabId);
   answered.delete(tabId);
@@ -623,7 +653,8 @@ async function confirmAction(tabId, agent, action, reason) {
     broadcast();
   }
   const allow = await new Promise((resolve) => {
-    const timer = setTimeout(() => finish(undefined), WAIT_MS);
+    // A flow passes the time its own call has left, so a question can't outlast it.
+    const timer = setTimeout(() => finish(undefined), Math.min(WAIT_MS, waitMs || WAIT_MS));
     const finish = (v) => { clearTimeout(timer); const list = confirmWaiters.get(tabId) || []; const i = list.indexOf(finish); if (i >= 0) list.splice(i, 1); resolve(v); };
     confirmWaiters.set(tabId, [...(confirmWaiters.get(tabId) || []), finish]);
   });
@@ -670,8 +701,8 @@ function expireConfirm(tabId, id) {
 // this browser session only.
 const FEED_MAX = 200;
 // Tools whose finished result (from the page) is a better line than the host's summary.
-const FEED_FROM_RESULT = new Set(["click", "hover", "type", "fill_form", "select_option", "press_key", "scroll", "upload_file", "navigate"]);
-const FEED_METHODS = new Set(["click", "hover", "type", "fill", "select", "press", "scroll", "upload", "navigate"]);
+const FEED_FROM_RESULT = new Set(["click", "click_at", "hover", "type", "fill_form", "select_option", "press_key", "scroll", "upload_file", "navigate"]);
+const FEED_METHODS = new Set(["click", "clickAt", "hover", "type", "fill", "select", "press", "scroll", "upload", "navigate"]);
 let feedTimer;
 
 function pushFeed(tabId, agent, text, kind = "act") {
@@ -904,7 +935,7 @@ api.webNavigation.onCommitted.addListener(async (d) => {
   state.applied.delete(d.tabId);
   state.preview.delete(d.tabId);
   applyStyles(d.tabId, d.url);
-  if (state.shared.has(d.tabId) && !state.cdp.has(d.tabId)) injectConsoleHook(d.tabId);
+  if (state.shared.has(d.tabId) && !state.cdp.has(d.tabId)) injectConsoleHook(d.tabId).then(() => docHolds.get(d.tabId)?.());
 });
 
 api.webNavigation.onDOMContentLoaded.addListener(async (d) => {
@@ -1354,16 +1385,56 @@ function updatePills() {
 }
 
 function injectConsoleHook(tabId) {
-  api.scripting
+  return api.scripting
     .executeScript({ target: { tabId, allFrames: false }, world: "MAIN", injectImmediately: true, func: consoleHook })
     .catch(() => {});
 }
 
-// Runs in the page. Mirrors console output and uncaught errors to the content script.
+// Firefox: a page's own scripts can run before the hook lands, and what they
+// log while loading is lost. So the first bytes of a shared tab's document are
+// held back for the moment it takes to install the hook, then let through
+// untouched. If the hook is slow or never comes, the page is released anyway.
+const HOOK_WAIT_MS = 300;
+const docHolds = new Map(); // tabId -> release()
+function holdDocument(d) {
+  let f;
+  try { f = api.webRequest.filterResponseData(d.requestId); } catch { return; }
+  const held = [];
+  let open = false, ended = false;
+  const release = () => {
+    if (open) return;
+    open = true;
+    clearTimeout(timer);
+    if (docHolds.get(d.tabId) === release) docHolds.delete(d.tabId);
+    try {
+      for (const chunk of held.splice(0)) f.write(chunk);
+      ended ? f.close() : f.disconnect();
+    } catch {}
+  };
+  const timer = setTimeout(release, HOOK_WAIT_MS);
+  docHolds.get(d.tabId)?.(); // an earlier load of this tab that never finished
+  docHolds.set(d.tabId, release);
+  f.ondata = (e) => { open ? f.write(e.data) : held.push(e.data); };
+  f.onstop = () => { ended = true; if (open) { try { f.close(); } catch {} } };
+  f.onerror = release;
+}
+
+// Runs in the page. Mirrors console output and uncaught errors to the content
+// script. On a page that is still loading the content script isn't there yet,
+// so messages wait here until it says it is listening.
 function consoleHook() {
   const mark = Symbol.for("tether.console");
   if (window[mark]) return;
   Object.defineProperty(window, mark, { value: true });
+  let listening = false;
+  const waiting = [];
+  const send = (entry) => window.postMessage({ __tetherConsole: entry }, "*");
+  window.addEventListener("message", (e) => {
+    if (e.source !== window || !e.data?.__tetherConsoleReady || listening) return;
+    listening = true;
+    for (const entry of waiting.splice(0)) send(entry);
+  });
+  window.postMessage({ __tetherConsoleHello: true }, "*");
   const post = (level, args) => {
     let text;
     try {
@@ -1371,7 +1442,9 @@ function consoleHook() {
     } catch {
       text = args.map(String).join(" ");
     }
-    window.postMessage({ __tetherConsole: { level, text: String(text).slice(0, 4000), at: Date.now() } }, "*");
+    const entry = { level, text: String(text).slice(0, 4000), at: Date.now() };
+    if (listening) send(entry);
+    else if (waiting.length < 300) waiting.push(entry);
   };
   for (const level of ["log", "info", "warn", "error", "debug"]) {
     const orig = console[level];
@@ -1515,6 +1588,7 @@ api.webRequest.onBeforeRequest.addListener(
     }
     wrRecs.set(d.requestId, rec);
     pushNet(d.tabId, rec);
+    if (IS_FIREFOX && api.webRequest.filterResponseData && d.type === "main_frame") holdDocument(d);
     // Firefox can read response bodies as they stream through.
     if (IS_FIREFOX && api.webRequest.filterResponseData && d.type === "xmlhttprequest") {
       try {
@@ -1718,7 +1792,18 @@ async function runCall(method, p) {
       return { note: `Now at ${t.url}` };
     }
     case "screenshot":
-      return screenshot(tabId);
+      return screenshot(tabId, p.maxSide);
+    case "find":
+      return findElement(tabId, p);
+    case "clickAt":
+      if (state.cdp.has(tabId)) {
+        const pt = await toContent(tabId, { cmd: "pointAt", x: p.x, y: p.y, toX: p.toX, toY: p.toY });
+        if (p.toX != null) await cdpDrag(tabId, p.x, p.y, p.toX, p.toY);
+        else await cdpMouse(tabId, p.x, p.y, p.double ? 2 : 1);
+        await settle(tabId);
+        return { note: pt.note };
+      }
+      break;
     case "runJs":
       return { value: await runJs(tabId, p.code) };
     case "network":
@@ -1784,8 +1869,40 @@ async function runCall(method, p) {
   }
   const fr = splitRef(p.ref);
   const res = await toContent(tabId, { cmd: method, ...p, ref: fr.ref }, true, fr.frameId);
-  if (!["readText", "waitFor", "mediaRead"].includes(method)) await settle(tabId);
+  if (!["readText", "waitFor", "mediaRead", "find"].includes(method)) await settle(tabId);
   return res;
+}
+
+// Finds a flow step's element: in the page (which covers its shadow roots and
+// same-origin frames), then in each frame from another site, whose refs are
+// written f<frame>.e<n>. With p.frame only frames whose address contains that
+// text are searched.
+async function findElement(tabId, p) {
+  let last;
+  if (!p.frame) {
+    try { return await toContent(tabId, { cmd: "find", ...p }); } catch (e) { last = e; }
+  }
+  const frames = (await prepareFrames(tabId)).filter((f) => f.frameId !== 0 && /^https?:/.test(f.url) && (!p.frame || f.url.includes(p.frame)));
+  if (p.frame && !frames.length) throw new Error(`No element: no frame on this page has “${p.frame}” in its address.`);
+  for (const f of frames) {
+    try {
+      const r = await toContent(tabId, { cmd: "find", ...p }, true, f.frameId);
+      return { ...r, ref: `f${f.frameId}.${r.ref}` };
+    } catch (e) {
+      last = last || e;
+    }
+  }
+  throw last;
+}
+
+async function cdpDrag(tabId, x, y, toX, toY) {
+  await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+  await cdp(tabId, "Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", buttons: 1, clickCount: 1 });
+  for (let i = 1; i <= 10; i++) {
+    await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", x: x + ((toX - x) * i) / 10, y: y + ((toY - y) * i) / 10, button: "left", buttons: 1 });
+    await sleep(12);
+  }
+  await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseReleased", x: toX, y: toY, button: "left", buttons: 0, clickCount: 1 });
 }
 
 async function cdpMouse(tabId, x, y, clicks) {
@@ -1832,23 +1949,48 @@ async function cdpKey(tabId, combo) {
   await cdp(tabId, "Input.dispatchKeyEvent", { type: "keyUp", key, code: def.code, windowsVirtualKeyCode: def.keyCode, modifiers });
 }
 
-async function screenshot(tabId) {
+async function screenshot(tabId, maxSide) {
   await toContent(tabId, { cmd: "pill", hidden: true }).catch(() => {});
   try {
     if (state.cdp.has(tabId)) {
       try {
         const r = await cdp(tabId, "Page.captureScreenshot", { format: "jpeg", quality: 80 });
-        return { data: r.data, mimeType: "image/jpeg" };
+        return await sized(tabId, r.data, maxSide);
       } catch {}
     }
     const t = await api.tabs.update(tabId, { active: true });
     await api.windows.update(t.windowId, { focused: true }).catch(() => {});
     await sleep(250);
     const url = await api.tabs.captureVisibleTab(t.windowId, { format: "jpeg", quality: 80 });
-    return { data: url.split(",")[1], mimeType: "image/jpeg" };
+    return await sized(tabId, url.split(",")[1], maxSide);
   } finally {
     toContent(tabId, { cmd: "pill", hidden: false }).catch(() => {});
   }
+}
+
+// Adds the image's size and the page's viewport size, which is what turns a
+// point in the image into a point on the page for click_at. With maxSide the
+// image is scaled down first, so the agent sees it at the size it was sent.
+async function sized(tabId, data, maxSide) {
+  const out = { data, mimeType: "image/jpeg" };
+  try {
+    const bmp = await createImageBitmap(await (await fetch("data:image/jpeg;base64," + data)).blob());
+    out.width = bmp.width;
+    out.height = bmp.height;
+    const scale = maxSide > 0 ? Math.min(1, maxSide / Math.max(bmp.width, bmp.height)) : 1;
+    if (scale < 1) {
+      const c = new OffscreenCanvas(Math.round(bmp.width * scale), Math.round(bmp.height * scale));
+      const g = c.getContext("2d");
+      g.imageSmoothingQuality = "high";
+      g.drawImage(bmp, 0, 0, c.width, c.height);
+      const small = await c.convertToBlob({ type: "image/jpeg", quality: 0.85 });
+      out.data = bytesToDataUrl(await small.arrayBuffer(), "image/jpeg").split(",")[1];
+      out.width = c.width;
+      out.height = c.height;
+    }
+    out.viewport = await toContent(tabId, { cmd: "viewport" });
+  } catch {}
+  return out;
 }
 
 // Runs code in the page's own world. Chromium uses the debugger (it ignores
@@ -2099,7 +2241,8 @@ async function popupState(tabId) {
   let tab = null;
   try { tab = await api.tabs.get(tabId); } catch {}
   return {
-    paired: !!s.key || IS_FIREFOX,
+    paired: s.paired,
+    canConnect: !IS_FIREFOX,
     bypass: state.bypass,
     recordValues: state.recordValues,
     recording: tab ? state.recording.get(tab.id) || null : null,
@@ -2139,7 +2282,7 @@ async function panelState() {
     confirming: publicConfirm(state.confirming.get(t.id)),
     activity: state.activity.get(t.id) || null,
   }));
-  return { paired: !!s.key || IS_FIREFOX, conn: state.conn, agents: state.agents, bypass: state.bypass, tabs, feed: state.feed.slice(-120) };
+  return { paired: s.paired, conn: state.conn, agents: state.agents, bypass: state.bypass, tabs, feed: state.feed.slice(-120) };
 }
 
 let broadcastTimer;
@@ -2257,12 +2400,13 @@ api.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if ("trusted" in msg) patch.trusted = !!msg.trusted;
         if ("standby" in msg) patch.standby = !!msg.standby;
         if ("askWindow" in msg) patch.askWindow = !!msg.askWindow;
+        if ("native" in msg) patch.native = !!msg.native;
         await api.storage.local.set(patch);
         if ("trusted" in msg) {
           for (const id of state.shared.keys()) (msg.trusted ? attachCdp : detachCdp)(id);
         }
         // Only reconnect when the connection itself changed.
-        if ("key" in msg || "port" in msg || "standby" in msg) {
+        if ("key" in msg || "port" in msg || "standby" in msg || "native" in msg) {
           disconnect();
           await refreshStandby();
         }

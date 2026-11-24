@@ -44,17 +44,30 @@ function renderStatus() {
 }
 
 function pairCard() {
-  return `
+  const key = `
+      <form id="pair">
+        <input id="key" type="text" placeholder="abcd-efgh-jkmn-pqrs" autocomplete="off" spellcheck="false" />
+        <button class="${st.canConnect ? "" : "primary"}" type="submit">Pair</button>
+      </form>
+      ${pairError ? `<p class="error">${esc(pairError)}</p>` : ""}`;
+  if (!st.canConnect) {
+    return `
     <section class="card pair">
       <div>
         <p style="font-weight:500">Pair with your agent</p>
         <p class="muted">Run <span class="cmd">tether key</span> in a terminal and paste the key here. You only do this once.</p>
+      </div>${key}
+    </section>`;
+  }
+  // Chromium: the bridge that `tether setup` registers connects without a key.
+  return `
+    <section class="card pair">
+      <div>
+        <p style="font-weight:500">Connect to Tether on this computer</p>
+        <p class="muted">Run <span class="cmd">tether setup</span> in a terminal once, then press Connect.</p>
       </div>
-      <form id="pair">
-        <input id="key" type="text" placeholder="abcd-efgh-jkmn-pqrs" autocomplete="off" spellcheck="false" />
-        <button class="primary" type="submit">Pair</button>
-      </form>
-      ${pairError ? `<p class="error">${esc(pairError)}</p>` : ""}
+      <button class="primary" data-act="connect">Connect</button>
+      <p class="faint">Or paste a pairing key from <span class="cmd">tether key</span>:</p>${key}
     </section>`;
 }
 
@@ -406,8 +419,17 @@ composerEl.addEventListener("click", (e) => {
   if (b.dataset.act === "dropImg") { composer.images.splice(Number(b.dataset.i), 1); renderThumbs(); }
 });
 
+// The bridge may have been registered since the last try (the extension was
+// installed before `tether setup` ran), so opening the popup tries it once.
+let triedBridge = false;
+
 async function refresh() {
   st = await send({ type: "state", tabId });
+  if (!st.paired && st.canConnect && !triedBridge) {
+    triedBridge = true;
+    await send({ type: "setSettings", native: true });
+    st = await send({ type: "state", tabId });
+  }
   st.showPill = (await api.storage.local.get("showPill")).showPill !== false;
   render();
 }
@@ -433,6 +455,9 @@ app.addEventListener("click", async (e) => {
   b.disabled = true;
   try {
     switch (b.dataset.act) {
+      case "connect":
+        await send({ type: "setSettings", native: true });
+        break;
       case "share":
       case "shareRead":
         // Firefox lets users withhold site access at install; ask on the first share.
@@ -523,6 +548,9 @@ app.addEventListener("click", async (e) => {
     if (b.dataset.act === "run") scriptResult = { id: b.dataset.id, text: err.message };
     else toast("That didn't work", { tone: "bad", body: err.message });
   }
+  // A button whose action changed nothing is the same button after the
+  // refresh (Connect, when the user says no), so it has to be usable again.
+  if (b.isConnected) b.disabled = false;
   refresh();
 });
 

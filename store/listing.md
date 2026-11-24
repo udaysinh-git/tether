@@ -81,6 +81,7 @@ AMO summary (250 characters max):
 | `notifications` | Shows watcher alerts the user set up. |
 | `alarms` | Reconnects to the local program after the browser suspends the extension, and runs scheduled watchers. |
 | `offscreen` | Plays short alert sounds, such as when an agent asks for the user's help, which a service worker cannot do. |
+| `nativeMessaging` | Connects the extension to the Tether program the user installed on their own computer, through the native messaging host that `tether setup` registers. It replaces copying a pairing key into the extension, and the extension talks to no other native program. |
 
 Remote code: **No.** All code ships in the package. Scripts the agent runs come from the user's own local program on their machine, at the user's request, and only in tabs the user shared.
 
@@ -97,6 +98,7 @@ Tether does not collect or transmit user data to the developer or any third part
 - Data collection: none (`data_collection_permissions: { required: ["none"] }` in the manifest).
 - `nativeMessaging`: Firefox upgrades an extension's connection to `ws://127.0.0.1` to `wss://`, which can't reach a local server, so Tether uses a native messaging bridge to talk to the local program.
 - `webRequestBlocking`: lifts a shared page's Content Security Policy on shared tabs only, so the agent's scripts can run where the user asked.
+- `webRequestFilterResponse`: reads the response bodies of requests made by shared tabs for the agent's network log, and holds a shared page's first bytes for at most 0.3 s so console output from the start of a page load is captured. Nothing is modified.
 - Notes for reviewers: the extension does nothing until it's paired with the local program from the open source repository (`npm install -g tether-browser`, then `tether setup`). Source: https://github.com/udaysinh-git/tether, build with `npm install && npm run build`; the Firefox build is `dist/firefox`.
 
 ## Images

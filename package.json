@@ -1,12 +1,12 @@
 {
   "name": "tether-browser",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "mcpName": "io.github.udaysinh-git/tether",
-  "description": "Browser MCP server and extension: Claude Code, Codex and any MCP agent use the tabs you share in Chrome or Firefox, signed in as you.",
+  "description": "Browser MCP server and extension: Claude Code, Codex, Cursor, OpenCode and any MCP agent use the tabs you share in Chrome or Firefox, signed in as you.",
   "main": "host/cli.js",
   "scripts": {
     "build": "node scripts/build-ext.js",
-    "test": "node test/tools.mjs && node scripts/build-ext.js && node test/e2e.mjs && node test/e2e.mjs --fallback && node test/features.mjs && node test/features.mjs --fallback && node test/safety.mjs && node test/safety.mjs --fallback",
+    "test": "node test/unit.mjs && node test/tools.mjs && node scripts/build-ext.js && node test/e2e.mjs && node test/e2e.mjs --fallback && node test/features.mjs && node test/features.mjs --fallback && node test/safety.mjs && node test/safety.mjs --fallback && node test/agent.mjs && node test/agent.mjs --fallback && node test/native.mjs && node test/firefox.mjs",
     "serve": "node host/cli.js serve",
     "icons": "node scripts/make-icons.js",
     "shots": "node scripts/build-ext.js && node test/shots.mjs",
@@ -28,7 +28,8 @@
     "node": ">=20"
   },
   "devDependencies": {
-    "playwright": "^1.65.1"
+    "playwright": "^1.65.1",
+    "selenium-webdriver": "^4.51.0"
   },
   "homepage": "https://tether.udaysinh.me",
   "keywords": [
@@ -38,6 +39,8 @@
     "browser-extension",
     "claude-code",
     "codex",
+    "cursor",
+    "opencode",
     "ai-agent",
     "browser-automation",
     "chrome",

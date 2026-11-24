@@ -6,6 +6,7 @@ import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { loadConfig, HOME } from "./config.js";
 import { health } from "./shim.js";
+import { setupAgents, linkSkill } from "./setup.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const CLI = path.join(ROOT, "host", "cli.js");
@@ -40,17 +41,23 @@ export async function doctor() {
     } catch {}
     const launcher = manifest && fs.existsSync(manifest) ? JSON.parse(fs.readFileSync(manifest, "utf8")).path : "";
     const launcherOk = launcher && fs.existsSync(launcher) && fs.readFileSync(launcher, "utf8").includes(path.join(ROOT, "host", "native.js"));
-    check(!!launcherOk, "Firefox/Zen bridge registered", "Run `node host/cli.js install-native`.");
+    check(!!launcherOk, "Firefox/Zen bridge registered", "Run `tether setup`.");
+    let chromium = false;
+    try { chromium = /REG_SZ/.test(execFileSync("reg", ["query", "HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\tether", "/ve"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })); } catch {}
+    check(chromium, "Chrome/Brave/Edge bridge registered (connects without a pairing key)", "Run `tether setup`.");
   } else {
-    const p = process.platform === "darwin" ? "Library/Application Support/Mozilla/NativeMessagingHosts/tether.json" : ".mozilla/native-messaging-hosts/tether.json";
-    check(fs.existsSync(path.join(os.homedir(), p)), "Firefox bridge registered", "Run `node host/cli.js install-native`.");
+    const mac = process.platform === "darwin";
+    const p = mac ? "Library/Application Support/Mozilla/NativeMessagingHosts/tether.json" : ".mozilla/native-messaging-hosts/tether.json";
+    check(fs.existsSync(path.join(os.homedir(), p)), "Firefox bridge registered", "Run `tether setup`.");
+    const c = mac ? "Library/Application Support/Google/Chrome/NativeMessagingHosts/tether.json" : ".config/google-chrome/NativeMessagingHosts/tether.json";
+    check(fs.existsSync(path.join(os.homedir(), c)), "Chrome/Brave/Edge bridge registered (connects without a pairing key)", "Run `tether setup`.");
   }
 
   // Host and browsers
   const h = await health(cfg.port);
   if (h) {
     check(true, `Host running on 127.0.0.1:${cfg.port}`);
-    check(h.browsers.length > 0, `Browsers connected: ${h.browsers.join(", ") || "none"}`, "Open the browser with Tether loaded. Chrome/Brave/Edge: paste the pairing key in the popup. Firefox/Zen: reload the extension after install-native.");
+    check(h.browsers.length > 0, `Browsers connected: ${h.browsers.join(", ") || "none"}`, "Open the browser with Tether installed; it connects by itself. If the Tether popup shows Connect, press it. In Firefox or Zen, reload the extension if it doesn't.");
     check(true, `Agents connected: ${h.agents.join(", ") || "none right now"}`);
   } else {
     check(true, `Host not running (starts when an agent or the Firefox bridge needs it)`);
@@ -58,23 +65,12 @@ export async function doctor() {
     if (busy) check(false, `Port ${cfg.port} is taken by another program`, `Free it, or set a different "port" in ${path.join(HOME, "config.json")} and in Tether's settings.`);
   }
 
-  // Agent configs
-  const claude = path.join(os.homedir(), ".claude.json");
-  const claudeOk = fs.existsSync(claude) && /"tether"\s*:/.test(fs.readFileSync(claude, "utf8")) && fs.readFileSync(claude, "utf8").includes(CLI.replace(/\\/g, "\\\\"));
-  check(claudeOk, "Claude Code has the tether MCP server", `Run: claude mcp add --scope user tether -- "${process.execPath}" "${CLI}"`);
-  const codex = path.join(os.homedir(), ".codex", "config.toml");
-  if (fs.existsSync(codex)) {
-    const t = fs.readFileSync(codex, "utf8");
-    const block = t.match(/\[mcp_servers\.tether\][^[]*/)?.[0] || "";
-    const badEscape = /"[^"\n]*\\[^\\"\n][^"\n]*"/.test(block) && !/'/.test(block);
-    check(!!block && !badEscape, "Codex has the tether MCP server", block ? "The [mcp_servers.tether] block uses backslashes inside double quotes; switch to single quotes or forward slashes." : `Add to ${codex}:\n    [mcp_servers.tether]\n    command = '${process.execPath}'\n    args = ['${CLI}']`);
-  }
-
-  // Skill links
-  for (const dir of [".claude/skills", ".codex/skills", ".agents/skills"]) {
-    const base = path.join(os.homedir(), dir);
-    if (!fs.existsSync(base)) continue;
-    check(fs.existsSync(path.join(base, "tether-browser", "SKILL.md")), `Skill installed in ~/${dir}`, `Link it: see "The skill" in README.md.`);
+  // Agents and the skill: the same checks `tether setup` makes, without writing.
+  const agents = setupAgents({ cli: CLI, write: false });
+  if (!agents.length) check(true, "No Claude Code, Codex, Cursor or OpenCode found (for another MCP client, see `tether setup --print`)");
+  for (const a of agents) check(a.status === "ok", `${a.name} has the tether MCP server`, "Run `tether setup`.");
+  for (const l of linkSkill({ skillDir: path.join(ROOT, "skills", "tether-browser"), write: false })) {
+    check(l.status === "ok" || l.status === "own", `Skill installed in ~/${l.dir}`, l.status === "manual" ? `~/${l.dir}/tether-browser exists but has no SKILL.md. Remove it and run \`tether setup\`.` : "Run `tether setup`.");
   }
 
   let bad = 0;

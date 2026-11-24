@@ -13,7 +13,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 const root = path.resolve(import.meta.dirname, "..");
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "tether-test-"));
 const PORT = 47899;
-const env = { ...process.env, TETHER_HOME: home, TETHER_PORT: String(PORT) };
+const env = { ...process.env, TETHER_HOME: home, TETHER_PORT: String(PORT), TETHER_TOOLS: "all" };
 const ok = (c, m) => {
   if (!c) { console.error("FAIL:", m, "\n   last output:", String(globalThis.lastOut || "").slice(0, 900).replace(/\n/g, "\n   ")); process.exitCode = 1; } else console.log("ok  ", m);
 };

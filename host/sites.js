@@ -9,7 +9,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { SITES_DIR } from "./config.js";
 
-const safe = (h) => String(h).toLowerCase().replace(/[^a-z0-9.\-]/g, "_");
+export const safe = (h) => String(h).toLowerCase().replace(/[^a-z0-9.\-]/g, "_");
 
 function dir(host, ...sub) {
   const d = path.join(SITES_DIR, safe(host), ...sub);
@@ -69,9 +69,11 @@ export function listSites() {
     .map((host) => {
       const sessions = sessionsOf(host);
       const notes = fs.existsSync(path.join(SITES_DIR, host, "notes.md"));
-      return { host, sessions: sessions.length, events: sessions.reduce((n, s) => n + s.events, 0), last: Math.max(0, ...sessions.map((s) => s.ended || 0)), notes };
+      let flows = 0;
+      try { flows = fs.readdirSync(path.join(SITES_DIR, host, "flows")).filter((f) => f.endsWith(".json")).length; } catch {}
+      return { host, sessions: sessions.length, events: sessions.reduce((n, s) => n + s.events, 0), last: Math.max(0, ...sessions.map((s) => s.ended || 0)), notes, flows };
     })
-    .filter((s) => s.sessions || s.notes)
+    .filter((s) => s.sessions || s.notes || s.flows)
     .sort((a, b) => b.last - a.last);
 }
 
@@ -86,7 +88,7 @@ export function sessionsOf(host) {
     .sort((a, b) => b.started - a.started);
 }
 
-function eventsOf(host, session) {
+export function eventsOf(host, session) {
   const f = path.join(SITES_DIR, safe(host), "sessions", session + ".jsonl");
   if (!fs.existsSync(f)) return [];
   // Page events arrive in batches a moment after network events, so order by time.

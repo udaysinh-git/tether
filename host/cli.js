@@ -3,27 +3,35 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig, rotateKey, HOME, SCRIPTS_DIR } from "./config.js";
 
-const [cmd = "stdio", ...rest] = process.argv.slice(2);
+// `tether --tools all` is still the stdio server, with an option.
+const argv = process.argv.slice(2);
+const [cmd, ...rest] = !argv.length || argv[0].startsWith("--") ? ["stdio", ...argv] : argv;
 const CLI = fileURLToPath(import.meta.url);
+const flag = (name) => { const i = rest.indexOf(name); return i >= 0 ? rest[i + 1] : undefined; };
 
 const HELP = `tether: hand browser tabs to your coding agent
 
   tether               Run as a stdio MCP server (what agents launch)
+  tether --tools all   The same, with every tool listed up front instead of
+                       loading the less common groups when a task needs them
   tether serve         Run the host in the foreground with logs
   tether key           Print the pairing key for the extension
   tether key --new     Make a new key (paste it into the extension again)
   tether status        Show connected browsers, agents and shared tabs
   tether doctor        Check every piece of the setup and say what to fix
-  tether setup         Print the lines that add Tether to Claude Code and Codex
+  tether setup         Add Tether to Claude Code, Codex, Cursor and OpenCode,
+                       link the skill and register the browser bridge
+  tether setup --print Show the config for each agent without writing anything
   tether install-native [--chrome-id <id>...]
-                       Let Firefox-based browsers (Firefox, Zen, LibreWolf) start
-                       and reach Tether; also Chromium browsers when given their id
+                       Register the bridge browsers use to reach Tether. Covers
+                       Firefox and its forks and the store build for Chrome,
+                       Brave and Edge; --chrome-id adds an unpacked build
 `;
 
 switch (cmd) {
   case "stdio": {
     const { runShim } = await import("./shim.js");
-    await runShim();
+    await runShim({ tools: flag("--tools") || process.env.TETHER_TOOLS || "" });
     break;
   }
   case "serve": {
@@ -63,21 +71,62 @@ switch (cmd) {
   }
   case "setup": {
     const node = process.execPath;
-    if (/[\\/]_npx[\\/]/.test(CLI)) {
+    const { snippets, setupAgents, linkSkill, tilde } = await import("./setup.js");
+    const os = await import("node:os");
+    const home = os.homedir();
+    const skillDir = path.join(path.dirname(CLI), "..", "skills", "tether-browser");
+    const stores = "  Chrome, Brave, Edge: https://chromewebstore.google.com/detail/tether/bdkhlojbkkldeehiolelnmnpaanjdncc\n  Firefox, Zen: https://addons.mozilla.org/firefox/addon/tether/";
+    // npx runs from a folder npm clears, so nothing written now would keep working.
+    const temporary = /[\\/]_npx[\\/]/.test(CLI);
+    if (temporary) {
       console.log("You're running Tether through npx, from a temporary folder that npm can clear.");
       console.log("Install it once so the paths below stay valid:  npm install -g tether-browser\n");
     }
-    const q = (s) => (s.includes(" ") ? `"${s}"` : s);
-    console.log("Claude Code:");
-    console.log(`  claude mcp add --scope user tether -- ${q(node)} ${q(CLI)}\n`);
-    console.log("Codex (~/.codex/config.toml):");
-    console.log(`  [mcp_servers.tether]\n  command = ${JSON.stringify(node)}\n  args = [${JSON.stringify(CLI)}]\n`);
-    console.log("Any other MCP client: run this as a stdio server:");
-    console.log(`  ${q(node)} ${q(CLI)}\n`);
-    console.log(`Pairing key for Chrome, Brave and Edge: ${loadConfig().key}\n`);
-    console.log("Get the extension:\n  Chrome, Brave, Edge: https://chromewebstore.google.com/detail/tether/bdkhlojbkkldeehiolelnmnpaanjdncc\n  Firefox, Zen: https://addons.mozilla.org/firefox/addon/tether/\n");
-    const { installNative } = await import("./install-native.js");
-    installNative();
+    const indent = (t) => t.replace(/^/gm, "  ");
+
+    if (rest.includes("--print") || temporary) {
+      const s = snippets(node, CLI);
+      console.log(`Claude Code:\n${indent(s.claude)}\n`);
+      console.log(`Codex (~/.codex/config.toml):\n${indent(s.codex)}\n`);
+      console.log(`Cursor (~/.cursor/mcp.json, or .cursor/mcp.json in a project):\n${indent(s.cursor)}\n`);
+      console.log(`OpenCode (~/.config/opencode/opencode.json):\n${indent(s.opencode)}\n`);
+      console.log(`Any other MCP client: run this as a stdio server:\n${indent(s.other)}\n`);
+      console.log(`Pairing key, if a browser asks for one: ${loadConfig().key}\n`);
+      console.log(`Get the extension:\n${stores}`);
+      if (!temporary) console.log("\nNothing was changed. Run `tether setup` without --print to write these for you.");
+      break;
+    }
+
+    const agents = setupAgents({ home, node, cli: CLI });
+    const said = { ok: "already set up", added: "added", updated: "updated to this install" };
+    console.log("Agents");
+    if (!agents.length) console.log("  None of Claude Code, Codex, Cursor or OpenCode found. For another MCP client, see `tether setup --print`.");
+    for (const a of agents) {
+      if (a.status === "manual") console.log(`  ${a.name.padEnd(12)} not changed: ${a.why}:\n${a.snippet.replace(/^/gm, "      ")}`);
+      else console.log(`  ${a.name.padEnd(12)} ${said[a.status]}${a.where && a.status !== "ok" ? ` (${tilde(home, a.where)})` : ""}`);
+    }
+
+    const links = linkSkill({ home, skillDir });
+    if (links.length) {
+      console.log("\nSkill (tells agents when and how to use Tether)");
+      const why = { ok: "already linked", added: "linked", updated: "link updated", own: "has its own copy, left alone", manual: "couldn't link it" };
+      for (const l of links) console.log(`  ~/${l.dir.padEnd(16)} ${why[l.status]}${l.status === "manual" && l.why ? ` (${l.why})` : ""}`);
+    }
+
+    // --no-bridge: only the agents and the skill, for a machine whose browser
+    // side is already set up (or a test that mustn't touch the registry).
+    if (!rest.includes("--no-bridge")) {
+      console.log("\nBrowser bridge");
+      const { installNative } = await import("./install-native.js");
+      installNative({ quiet: true }).forEach((l) => console.log(`  ${l}`));
+    }
+
+    console.log("\nNext");
+    console.log(`  1. Install the extension:\n${indent(stores)}`);
+    console.log("  2. It connects by itself. If the Tether popup shows Connect (the extension was there first), press it.");
+    console.log(`     Pairing key, if you'd rather paste one: ${loadConfig().key}`);
+    if (agents.some((a) => a.status === "added" || a.status === "updated")) console.log("  3. Restart agents that were already running, so they pick Tether up.");
+    console.log("\n`tether doctor` checks all of it. `tether setup --print` shows the config without writing it.");
     break;
   }
   case "doctor": {

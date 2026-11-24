@@ -31,8 +31,11 @@ export async function ensureDaemon(cfg) {
   return false;
 }
 
-export async function runShim() {
+// tools: "all" gives the agent every tool up front; anything else is the
+// default, where the less common groups load on demand.
+export async function runShim({ tools = "" } = {}) {
   const cfg = loadConfig();
+  let groups = []; // tool groups this agent has loaded, restored after a host restart
   const endpoint = `http://127.0.0.1:${cfg.port}/mcp`;
   let sessionId = null;
   let protocolVersion = null;
@@ -49,6 +52,8 @@ export async function runShim() {
     const headers = { "content-type": "application/json", accept: "application/json, text/event-stream", authorization: `Bearer ${cfg.key}` };
     if (sessionId) headers["mcp-session-id"] = sessionId;
     if (protocolVersion) headers["mcp-protocol-version"] = protocolVersion;
+    if (tools === "all") headers["x-tether-tools"] = "all";
+    if (groups.length) headers["x-tether-groups"] = groups.join(",");
     return fetch(endpoint, { method: "POST", headers, body: JSON.stringify(msg) });
   }
 
@@ -68,14 +73,28 @@ export async function runShim() {
     const type = res.headers.get("content-type") || "";
     const body = await res.text();
     if (!res.ok) return fail(msg, `Tether host error ${res.status}: ${body.slice(0, 200)}`);
+    const msgs = [];
     if (type.includes("text/event-stream")) {
-      for (const line of body.split(/\r?\n/)) if (line.startsWith("data:")) out(JSON.parse(line.slice(5)));
+      for (const line of body.split(/\r?\n/)) if (line.startsWith("data:")) msgs.push(JSON.parse(line.slice(5)));
     } else if (body.trim()) {
       const data = JSON.parse(body);
-      for (const m of Array.isArray(data) ? data : [data]) out(m);
+      msgs.push(...(Array.isArray(data) ? data : [data]));
+    }
+    for (const m of msgs) {
+      out(m);
+      // The host marks a result when the call changed which tools exist (a
+      // group was loaded). It has no stream to this client to say so itself,
+      // so the notification is sent from here.
+      const meta = m?.result?._meta;
+      if (meta?.["tether/toolsChanged"]) {
+        if (Array.isArray(meta["tether/groups"])) groups = meta["tether/groups"].filter((g) => g !== "core");
+        listChanged();
+      }
     }
     return res;
   }
+
+  const listChanged = () => out({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
 
   async function reinit() {
     if (!initMsg) return false;

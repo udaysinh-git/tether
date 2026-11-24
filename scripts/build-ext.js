@@ -23,13 +23,20 @@ const targets = {
     minimum_chrome_version: "120",
     background: { service_worker: "background.js" },
     side_panel: { default_path: "panel/panel.html" },
-    permissions: ["offscreen", "tabs", "activeTab", "scripting", "storage", "unlimitedStorage", "debugger", "webRequest", "webNavigation", "cookies", "userScripts", "alarms", "downloads", "notifications", "sidePanel"],
+    // nativeMessaging lets the extension reach the local host through the bridge
+    // `tether setup` registers, so nobody pastes a pairing key. It has to be a
+    // normal permission: Chrome doesn't give one granted later to the parts of
+    // an extension that are already running, so an optional one can't be used
+    // on the click that grants it.
+    permissions: ["offscreen", "tabs", "activeTab", "scripting", "storage", "unlimitedStorage", "debugger", "webRequest", "webNavigation", "cookies", "userScripts", "alarms", "downloads", "notifications", "sidePanel", "nativeMessaging"],
   },
   firefox: {
     ...base,
     background: { scripts: ["sounds.js", "background.js"] },
     sidebar_action: { default_panel: "panel/panel.html", default_title: "Tether", default_icon: icons, open_at_install: false },
-    permissions: ["tabs", "activeTab", "scripting", "storage", "unlimitedStorage", "webRequest", "webRequestBlocking", "webNavigation", "cookies", "alarms", "nativeMessaging", "downloads", "notifications"],
+    // webRequestFilterResponse: without it Firefox doesn't hand an MV3 extension
+    // response bodies, and network_request shows every body as not captured.
+    permissions: ["tabs", "activeTab", "scripting", "storage", "unlimitedStorage", "webRequest", "webRequestBlocking", "webRequestFilterResponse", "webNavigation", "cookies", "alarms", "nativeMessaging", "downloads", "notifications"],
     optional_permissions: ["userScripts"],
     // Firefox's MV3 default adds upgrade-insecure-requests, which turns the
     // ws://127.0.0.1 connection to the host into wss:// and breaks it.

@@ -287,8 +287,21 @@
     return [nameOf(el), el.value && el.tagName === "INPUT" ? el.value : "", el.getAttribute("title") || "", el.getAttribute("aria-label") || ""].join(" ");
   }
 
-  async function risk({ ref, kind }) {
-    const el = byRef(ref);
+  async function risk({ ref, kind, x, y }) {
+    let el;
+    if (ref) el = byRef(ref);
+    else {
+      // click_at: judge whatever is under the point.
+      const hit = elementAt(x, y);
+      el = hit.el;
+      if (!el) return { risky: false, what: "a point on the page" };
+      if (hit.foreign) {
+        // Another site's frame: its own copy of this script has to look.
+        const id = frameIds.get(el);
+        if (id != null) return { frame: id, x: hit.x, y: hit.y };
+        return { risky: true, what: "something inside an embedded frame", reason: "Tether can't see what is there" };
+      }
+    }
     let target = el.closest?.(CLICKABLE) || el;
     if (kind === "submit") {
       const form = el.form || el.closest("form");
@@ -391,14 +404,16 @@
   const reduceMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   async function moveCursor(el) {
+    const r = el.getBoundingClientRect();
+    // Aim a little left of centre on wide fields, where people actually click.
+    return moveCursorTo(Math.round(r.left + Math.min(r.width / 2, r.width > 240 ? 60 : r.width / 2)), Math.round(r.top + r.height / 2));
+  }
+
+  async function moveCursorTo(x, y) {
     if (!IS_TOP || !showCursor || !shared) return;
     ensurePill();
     const c = pillRoot?.querySelector(".cur");
     if (!c) return;
-    const r = el.getBoundingClientRect();
-    // Aim a little left of centre on wide fields, where people actually click.
-    const x = Math.round(r.left + Math.min(r.width / 2, r.width > 240 ? 60 : r.width / 2));
-    const y = Math.round(r.top + r.height / 2);
     c.querySelector(".name").textContent = agents[0] || "Agent";
     const from = cur.x == null ? { x: Math.min(innerWidth - 40, x + 160), y: Math.min(innerHeight - 40, y + 120) } : cur;
     const dist = Math.hypot(x - from.x, y - from.y);
@@ -502,6 +517,168 @@
     const note = `Clicked ${label(el)}`;
     setActivity(note);
     return { note };
+  }
+
+  // ---- acting on a point (click_at), for what the outline can't name
+
+  // The element under a viewport point, looking through open shadow roots and
+  // same-origin frames. x and y come back relative to the element's document.
+  function elementAt(x, y) {
+    let doc = document, el = null, foreign = false;
+    for (let depth = 0; depth < 8; depth++) {
+      let hit = (doc.elementsFromPoint(x, y) || []).find((e) => e !== pillHost) || null;
+      while (hit?.shadowRoot) {
+        const inner = hit.shadowRoot.elementsFromPoint(x, y).find((e) => e !== hit && hit.shadowRoot.contains(e));
+        if (!inner) break;
+        hit = inner;
+      }
+      if (!hit) break;
+      el = hit;
+      if (hit.tagName !== "IFRAME" && hit.tagName !== "FRAME") break;
+      const r = hit.getBoundingClientRect();
+      x -= r.left + hit.clientLeft;
+      y -= r.top + hit.clientTop;
+      let inner = null;
+      try { inner = hit.contentDocument; } catch {}
+      if (!inner) { foreign = true; break; }
+      doc = inner;
+    }
+    return { el, x, y, foreign };
+  }
+
+  // Tether's own panel (Pause, Stop, Allow, Deny, Done) is for the user. Real
+  // input at a point would press those buttons like a person does, so a point
+  // on the panel is refused.
+  function notOurs(x, y) {
+    if (pillHost && document.elementsFromPoint(x, y)[0] === pillHost) throw new Error("That point is on Tether's own panel, which only the user can press.");
+  }
+
+  function pointNote(el, x, y, toX, toY) {
+    const what = el ? label(el.closest?.(CLICKABLE) || el) : "the page";
+    const at = `(${Math.round(x)}, ${Math.round(y)})`;
+    return toX != null ? `Dragged on ${what} from ${at} to (${Math.round(toX)}, ${Math.round(toY)})` : `Clicked ${what} at ${at}`;
+  }
+
+  // For real input: show the cursor going there and say what is under it.
+  async function pointAt({ x, y, toX, toY }) {
+    notOurs(x, y);
+    if (toX != null) notOurs(toX, toY);
+    const hit = elementAt(x, y);
+    await moveCursorTo(Math.round(x), Math.round(y));
+    cursorClick();
+    const note = pointNote(hit.el, x, y, toX, toY);
+    setActivity(note);
+    return { note };
+  }
+
+  function mouseAt(el, type, x, y, extra = {}) {
+    const init = { bubbles: true, cancelable: true, composed: true, view: el.ownerDocument.defaultView, clientX: x, clientY: y, screenX: x, screenY: y, button: 0, ...extra };
+    const E = type.startsWith("pointer") ? PointerEvent : MouseEvent;
+    return el.dispatchEvent(new E(type, { pointerId: 1, pointerType: "mouse", isPrimary: true, ...init }));
+  }
+
+  async function clickAt({ x, y, double, toX, toY }) {
+    notOurs(x, y);
+    if (toX != null) notOurs(toX, toY);
+    const hit = elementAt(x, y);
+    if (!hit.el) throw new Error("Nothing is at that point.");
+    if (hit.foreign) throw new Error("That point is inside a frame from another site, which only real input can reach here. Use the frame's refs from the snapshot instead.");
+    await moveCursorTo(Math.round(x), Math.round(y));
+    cursorClick();
+    const el = hit.el;
+    const down = (n) => { mouseAt(el, "pointerdown", hit.x, hit.y, { buttons: 1, detail: n }); mouseAt(el, "mousedown", hit.x, hit.y, { buttons: 1, detail: n }); };
+    for (const t of ["pointerover", "mouseover", "pointermove", "mousemove"]) mouseAt(el, t, hit.x, hit.y);
+    down(1);
+    el.focus?.({ preventScroll: true });
+    if (toX != null) {
+      // A drag: the page sees the pointer travel with the button held.
+      let last = hit;
+      for (let i = 1; i <= 10; i++) {
+        const p = elementAt(x + ((toX - x) * i) / 10, y + ((toY - y) * i) / 10);
+        if (!p.el || p.foreign) continue;
+        last = p;
+        mouseAt(p.el, "pointermove", p.x, p.y, { buttons: 1 });
+        mouseAt(p.el, "mousemove", p.x, p.y, { buttons: 1 });
+        await new Promise((r) => setTimeout(r, 12));
+      }
+      mouseAt(last.el, "pointerup", last.x, last.y);
+      mouseAt(last.el, "mouseup", last.x, last.y);
+      await moveCursorTo(Math.round(toX), Math.round(toY));
+    } else {
+      const up = (n) => { mouseAt(el, "pointerup", hit.x, hit.y, { detail: n }); mouseAt(el, "mouseup", hit.x, hit.y, { detail: n }); mouseAt(el, "click", hit.x, hit.y, { detail: n }); };
+      up(1);
+      if (double) { down(2); up(2); mouseAt(el, "dblclick", hit.x, hit.y, { detail: 2 }); }
+    }
+    const note = pointNote(el, x, y, toX, toY);
+    setActivity(note);
+    return { note };
+  }
+
+  const viewport = () => ({ w: innerWidth, h: innerHeight });
+
+  // ---- finding an element again (flows)
+  // A saved step names its element by CSS selector, role and visible name, as
+  // the recorder wrote them down. The selector is tried first; when it now
+  // points at something with a different name (a list reordered, a layout
+  // changed), the role and name win. Like the outline, the search reaches
+  // into open shadow roots and same-origin frames.
+  const flat = (s) => String(s ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+
+  // What is inside an element that has its own tree: a shadow root, or the
+  // document of a frame this page may read.
+  function innerRoot(el) {
+    if (el.shadowRoot) return el.shadowRoot;
+    if (el.tagName === "IFRAME" || el.tagName === "FRAME") { try { return el.contentDocument?.body ? el.contentDocument : null; } catch {} }
+    return null;
+  }
+
+  function allRoots() {
+    const out = [document];
+    for (let i = 0; i < out.length && out.length < 300; i++) {
+      for (const el of out[i].querySelectorAll("*")) { const r = innerRoot(el); if (r) out.push(r); }
+    }
+    return out;
+  }
+
+  function find({ selector, role: wantRole, name, scope }) {
+    const usable = (el) => el.isConnected && (el.type === "file" || visible(el, getComputedStyle(el)));
+    const within = (sel, roots) => roots.flatMap((r) => { try { return [...r.querySelectorAll(sel)]; } catch { return []; } }).filter(usable);
+    const want = flat(name);
+    // The recorder cuts long names short and marks the cut with an ellipsis.
+    const named = (el) => { const n = flat(nameOf(el)); return want.endsWith("…") ? n.startsWith(want.slice(0, -1)) : n === want; };
+    const pick = (list) => (want ? list.find(named) : list[0]) || null;
+    const done = (el) => ({ ref: refFor(el), what: label(el) });
+
+    // scope: the shadow hosts (or frames) the recorder found the element
+    // inside, outermost first. The selector is only unique within that tree.
+    let home = document;
+    for (const hostSel of scope || []) {
+      let host = null;
+      try { host = home.querySelector(hostSel); } catch {}
+      home = (host && innerRoot(host)) || null;
+      if (!home) break;
+    }
+    let bySel = selector && home ? within(selector, [home]) : [];
+    let hit = pick(bySel);
+    if (hit) return done(hit);
+
+    // Not where it was recorded: look through every tree on the page.
+    const roots = allRoots();
+    if (selector && roots.length > 1) {
+      const wider = within(selector, roots);
+      hit = pick(wider);
+      if (hit) return done(hit);
+      if (!bySel.length) bySel = wider;
+    }
+    if (want) {
+      const sameRole = (el) => !wantRole || (role(el) || el.getAttribute("role") || el.tagName.toLowerCase()) === wantRole;
+      hit = within(ACTIONABLE + ",[role]", roots).find((el) => sameRole(el) && named(el));
+      if (hit) return done(hit);
+    }
+    // No name match anywhere: a selector that names the element (an id, a
+    // test id, a field name) is still trusted; one that counts positions isn't.
+    if (bySel[0] && !/:nth-/.test(selector)) return done(bySel[0]);
+    throw new Error(`No element on this page matches ${[selector && `selector ${selector}`, name && `${wantRole || "element"} ${q(name)}`].filter(Boolean).join(" or ")}.`);
   }
 
   async function hover({ ref }) {
@@ -995,6 +1172,11 @@
     if (href && !href.startsWith("javascript:")) d.href = clip(href, 200);
     const ctx = contextOf(el);
     if (ctx) d.context = ctx;
+    // Inside a shadow root the selector is only unique within that root, so
+    // the hosts on the way down are kept too, outermost first.
+    const scope = [];
+    for (let r = el.getRootNode(); r instanceof ShadowRoot; r = r.host.getRootNode()) scope.unshift(selectorFor(r.host));
+    if (scope.length) d.scope = scope;
     d.rect = [Math.round(r.left + scrollX), Math.round(r.top + scrollY), Math.round(r.width), Math.round(r.height)];
     return d;
   }
@@ -1331,7 +1513,7 @@
 
   // ------------------------------------------------------------ wiring
 
-  const handlers = { snapshot, readText, locate, focusFor, click, hover, type, fill, select, press, scroll, waitFor, upload, listMedia, mediaRead, videoFrame, risk };
+  const handlers = { snapshot, readText, locate, focusFor, click, hover, type, fill, select, press, scroll, waitFor, upload, listMedia, mediaRead, videoFrame, risk, find, clickAt, pointAt, viewport };
 
   api.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg.agents) agents = msg.agents;
@@ -1431,9 +1613,14 @@
 
   // Console mirror from the page-world hook (used where the debugger isn't available).
   window.addEventListener("message", (e) => {
-    if (e.source !== window || !e.data?.__tetherConsole) return;
+    if (e.source !== window) return;
+    // The hook asks whether anyone is listening; it holds messages until told.
+    if (e.data?.__tetherConsoleHello) return window.postMessage({ __tetherConsoleReady: true }, "*");
+    if (!e.data?.__tetherConsole) return;
     api.runtime.sendMessage({ type: "console", entry: e.data.__tetherConsole }).catch?.(() => {});
   });
+  // And if the hook was there first, this is its answer.
+  if (IS_TOP) window.postMessage({ __tetherConsoleReady: true }, "*");
 
   // When the extension is reloaded or updated, this copy is cut off from it.
   // Take the pill and listeners down so the new copy is the only one.

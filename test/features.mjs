@@ -14,7 +14,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 const root = path.resolve(import.meta.dirname, "..");
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "tether-feat-"));
 const PORT = 47898;
-const env = { ...process.env, TETHER_HOME: home, TETHER_PORT: String(PORT) };
+const env = { ...process.env, TETHER_HOME: home, TETHER_PORT: String(PORT), TETHER_TOOLS: "all" };
 const TRUSTED = !process.argv.includes("--fallback");
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const ok = (c, m) => {

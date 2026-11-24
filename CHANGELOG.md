@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.5.0 (2026-11-24)
+
+- `tether setup` does the setup. It finds Claude Code, Codex, Cursor and OpenCode, adds Tether to each one's MCP config, links the skill and registers the browser bridge. It changes one entry per file, keeps comments and other settings, and prints the snippet for any file it can't edit safely. `tether setup --print` shows the config without writing it, as before.
+- Cursor (`~/.cursor/mcp.json`) and OpenCode (`~/.config/opencode/opencode.json`, both config formats) are supported next to Claude Code and Codex, and `tether doctor` checks all four.
+- No pairing key in Chrome, Brave and Edge. `tether setup` registers the bridge for the Chrome Web Store build, and the extension connects through it by itself, as Firefox does. If the extension was installed first, opening the popup connects it. This adds the `nativeMessaging` permission to the Chromium build, so Chrome asks people who already have Tether to accept it once when they update. Pasting a key still works.
+- Agents start with 22 tools and load the rest when a task needs them. `load_tools` lists five groups (devtools, media, watchers, customize, sites) in one line each and returns a group's tools; clients that don't refresh their tool list reach them through `call_tool`. The starting tool list is 43% the size of the full one. `tether --tools all` or `TETHER_TOOLS=all` lists everything up front.
+- Actions return what changed. After a click or a keystroke the agent gets the lines that were added and removed, under the form or dialog they sit in, and its existing refs keep working. A navigation, a short page or a page that mostly changed still returns the whole outline, and `snapshot` always does.
+- A change request sent from the popup reaches a working agent on its next tool call, with the tools to handle it loaded.
+- Flows. `save_flow` stores a task on a site as steps with `{{inputs}}`, and `run_flow` replays it in one call. `site_sessions` with `as_flow` drafts the steps from a recording. Steps find their element by selector, then by role and name. A risky step still waits for Allow, passwords are never stored (an `ask_user` step hands the tab over), a long or waiting flow returns with the step to continue from, and a flow that can't find an element stops and returns the page. An agent's first outline of a site names its saved flows. Steps reach into open shadow roots and into frames from other sites; `scope` and `frame` on a step say where, and without them the whole page and then its frames are searched.
+- `click_at` clicks or drags at a point in the latest screenshot, for canvas apps the outline can't describe. `screenshot` takes `max_side` and reports the image's size.
+- Firefox: `network_request` now shows fetch and XHR response bodies. They were never captured, because the build lacked the `webRequestFilterResponse` permission.
+- Firefox: console output from the first moments of a page load is captured. The page's first bytes are held (for at most 0.3 s) until the console hook is in, and the hook keeps messages until the content script is listening.
+- A new suite drives the Firefox build in a real Firefox (`test/firefox.mjs`, through geckodriver), and `test/native.mjs` connects the shipped Chromium build through the bridge.
+
 ## 0.4.1 (2026-11-21)
 
 - Tether is on the Chrome Web Store and Firefox Add-ons. `tether setup`, `tether doctor` and the hint agents get when no browser is connected now link to both stores.

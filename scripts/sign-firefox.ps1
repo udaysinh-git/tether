@@ -23,4 +23,7 @@ try {
 } finally { [Win.Cred]::CredFree($p) }
 Set-Location (Split-Path $PSScriptRoot)
 node scripts/build-ext.js
-npx --yes web-ext@8 sign -s dist/firefox -a dist --channel $Channel
+# A listed version carries its release notes and the notes for Mozilla's reviewers.
+$notes = @()
+if ($Channel -eq "listed" -and (Test-Path store/amo-version.json)) { $notes = @("--amo-metadata", "store/amo-version.json") }
+npx --yes web-ext@8 sign -s dist/firefox -a dist --channel $Channel @notes

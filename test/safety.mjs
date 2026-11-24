@@ -14,7 +14,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 const root = path.resolve(import.meta.dirname, "..");
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "tether-safety-"));
 const PORT = 47896;
-const env = { ...process.env, TETHER_HOME: home, TETHER_PORT: String(PORT) };
+const env = { ...process.env, TETHER_HOME: home, TETHER_PORT: String(PORT), TETHER_TOOLS: "all" };
 const TRUSTED = !process.argv.includes("--fallback");
 const SHOTS = process.argv.includes("--shots") ? path.join(root, "test", "shots") : null;
 const AGENT = "Claude Code"; // how the host names an MCP client called "claude-code"

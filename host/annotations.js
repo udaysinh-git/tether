@@ -40,6 +40,11 @@ export const ANNOTATIONS = {
   scroll: write("Scroll the page", { openWorld: true }),
   run_js: write("Run JavaScript in the page", { destructive: true, openWorld: true }),
   upload_file: write("Attach files to an input", { idempotent: true, openWorld: true }),
+  click_at: write("Click at a point", { destructive: true, openWorld: true }),
+
+  // tools that stay out of the agent's context until it asks for them
+  load_tools: read("Load more Tether tools"),
+  call_tool: write("Call a loaded Tether tool by name", { destructive: true, openWorld: true }),
 
   // devtools (the log tools can clear their buffer, so they aren't read-only)
   network_requests: write("List network requests", { idempotent: true }),
@@ -86,7 +91,56 @@ export const ANNOTATIONS = {
   site_map: read("Summarise a recorded site"),
   site_sessions: read("Read recorded sessions"),
   site_notes: write("Read or write site notes", { idempotent: true }),
+
+  // flows: a recorded task saved as steps, replayed in one call
+  save_flow: write("Save a flow", { idempotent: true }),
+  run_flow: write("Run a saved flow", { destructive: true, openWorld: true }),
+  list_flows: read("List saved flows"),
+  delete_flow: write("Delete a flow", { destructive: true, idempotent: true }),
 };
+
+// Agents start with the core group. The other groups are listed to them in one
+// line each (the `about` text) and load when the task needs them, so a session
+// that only reads and clicks doesn't carry sixty tool definitions.
+export const GROUPS = {
+  core: {
+    about: "tabs and sessions, reading pages, clicking, typing, screenshots, running JavaScript",
+    tools: ["list_tabs", "open_tab", "close_tab", "navigate", "start_session", "end_session", "request_bypass", "wait_for_user", "snapshot", "read_text", "wait_for", "screenshot", "click", "hover", "type", "fill_form", "select_option", "press_key", "scroll", "run_js", "upload_file", "click_at"],
+  },
+  devtools: {
+    about: "the network log with request and response bodies, console output and errors, cookies",
+    tools: ["network_requests", "network_request", "console_messages", "cookies"],
+  },
+  media: {
+    about: "list and save images, video, audio and streams, grab a video frame, wait for and list downloads",
+    tools: ["list_media", "save_media", "video_frame", "wait_for_download", "download_file", "list_downloads"],
+  },
+  watchers: {
+    about: "check a page on a schedule and notify the user when something changes",
+    tools: ["save_watcher", "list_watchers", "run_watcher", "delete_watcher"],
+  },
+  customize: {
+    about: "restyle a site with saved CSS, save userscripts that run on it, read and resolve change requests the user sends from the Tether popup",
+    tools: ["apply_css", "clear_preview", "save_style", "list_styles", "get_style", "delete_style", "list_scripts", "save_script", "get_script", "run_script", "install_userscript", "delete_script", "get_requests", "resolve_request"],
+  },
+  sites: {
+    about: "what Tether recorded about how the user uses a site, notes kept between sessions, and flows that replay a recorded task in one call",
+    tools: ["site_list", "site_map", "site_sessions", "site_notes", "save_flow", "run_flow", "list_flows", "delete_flow"],
+  },
+};
+
+// The two tools that load the rest; on only while some group is still unloaded.
+export const LOADERS = ["load_tools", "call_tool"];
+
+const GROUP_OF = new Map();
+for (const [g, { tools }] of Object.entries(GROUPS)) for (const t of tools) GROUP_OF.set(t, g);
+
+export function groupOf(name) {
+  if (LOADERS.includes(name)) return "loader";
+  const g = GROUP_OF.get(name);
+  if (!g) throw new Error(`Tool ${name} is in no group in host/annotations.js`);
+  return g;
+}
 
 export function annotationsFor(name) {
   const a = ANNOTATIONS[name];
