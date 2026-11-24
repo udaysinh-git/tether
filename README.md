@@ -21,7 +21,7 @@
   <a href="https://github.com/udaysinh-git/tether#development"><img src="https://img.shields.io/badge/tests-7%20suites%2C%20all%2053%20tools-d4af37?logo=playwright&labelColor=1a1a1a&color=d4af37&logoColor=white" alt="End-to-end tests cover all 53 tools" /></a>
 </p>
 
-<p align="center"><a href="https://glama.ai/mcp/servers/udaysinh-git/tether"><img src="https://glama.ai/mcp/servers/udaysinh-git/tether/badge" width="380" alt="Tether on Glama: security, licence and quality scores" /></a></p>
+<p align="center"><a href="https://glama.ai/mcp/servers/udaysinh-git/tether"><img src="https://glama.ai/mcp/servers/udaysinh-git/tether/badges/score.svg" alt="udaysinh-git/tether MCP server" /></a></p>
 
 <p align="center"><a href="https://tether.udaysinh.me">Website</a> · <a href="https://tether.udaysinh.me/guide/">Guide</a> · <a href="https://discord.gg/UcB8z8u4JP">Discord</a></p>
 
