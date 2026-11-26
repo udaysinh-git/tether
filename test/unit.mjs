@@ -193,5 +193,57 @@ const cli = process.platform === "win32" ? "C:\\Users\\me\\AppData\\Roaming\\npm
   ok(saveFlow({ site: "erp.test", name: "New invoice", steps: draft }).steps.length === 7, "the draft saves as it is");
 }
 
+// ---------------------------------------------------------------- bridge parts
+{
+  const { parts, joinParts, PART_BYTES } = await import("../host/bridge-parts.js");
+  const small = Buffer.from(JSON.stringify({ id: 1, result: { note: "hi" } }));
+  ok(parts(small).length === 1 && parts(small)[0] === small, "a small message goes out whole");
+  // Multi-byte text, so slices cut through characters.
+  const msg = { id: 2, method: "upload", params: { files: [{ name: "ॐ नमः.txt", data: Buffer.alloc(2 * 1024 * 1024, 9).toString("base64") }], note: "दिल ".repeat(50000) } };
+  const out = parts(Buffer.from(JSON.stringify(msg)));
+  const sizes = out.map((b) => b.length);
+  ok(out.length > 3 && sizes.every((n) => n < 1024 * 1024), `a ${Math.round(JSON.stringify(msg).length / 1024)} KB message goes out in ${out.length} parts, each under 1 MB`);
+  const got = joinParts(out.map((b) => JSON.parse(b).part).reverse());
+  ok(JSON.stringify(got) === JSON.stringify(msg), "the parts join back into the same message, in any order, without breaking characters");
+  ok(PART_BYTES * (4 / 3) < 1024 * 1024 - 1024, "a part's base64 stays under the browser's 1 MB limit");
+}
+
+// ---------------------------------------------------------------- finding files to upload
+{
+  const { expand, resolveFiles, blockedReason, payload } = await import("../host/files.js");
+  ok(expand("~/a.pdf") === path.join(os.homedir(), "a.pdf"), "~ expands to the home folder");
+  process.env.TETHER_UNIT_DIR = tmp;
+  ok(expand("%TETHER_UNIT_DIR%/x") === tmp + "/x" && expand("$TETHER_UNIT_DIR/x") === tmp + "/x" && expand("${TETHER_UNIT_DIR}/x") === tmp + "/x", "%VAR%, $VAR and ${VAR} expand");
+  const d = path.join(tmp, "uploads");
+  fs.mkdirSync(d);
+  for (const n of ["invoice-oct.pdf", "invoice-nov.pdf", "photo.png", ".hidden"]) fs.writeFileSync(path.join(d, n), n);
+  const names = async (p) => (await resolveFiles(p)).map((f) => f.name).sort().join();
+  ok((await names([path.join(d, "invoice-*.pdf")])) === "invoice-nov.pdf,invoice-oct.pdf", "a wildcard in the name");
+  ok((await names([d])) === "invoice-nov.pdf,invoice-oct.pdf,photo.png", "a folder gives its files, not hidden ones");
+  ok((await names([path.join(d, "photo.png"), path.join(d, "*.png")])) === "photo.png", "the same file twice is uploaded once");
+  const err = async (p) => { try { await resolveFiles(p); return ""; } catch (e) { return e.message; } };
+  ok(/doesn't exist[\s\S]*invoice-oct\.pdf/.test(await err([path.join(d, "invoice-october.pdf")])), "a wrong name suggests similar files");
+  ok(/relative path/.test(await err(["photo.png"])), "a relative path is refused");
+  ok(!!blockedReason(path.join(os.homedir(), ".ssh", "config")) && !!blockedReason(path.join(d, "server.pem")) && !!blockedReason(path.join(d, ".env.local")) && !blockedReason(path.join(d, "photo.png")), "keys, .env files and ~/.ssh are off limits; ordinary files are not");
+  const dl = await resolveFiles(["download:7"], { downloads: async (id) => (id === 7 ? { id, state: "complete", filename: path.join(d, "photo.png") } : null) });
+  ok(dl[0].name === "photo.png" && /no download 8/.test(await err(["download:8"])), "download:<id> uses the browser's download");
+  const pl = payload(await resolveFiles([path.join(d, "photo.png")]));
+  ok(pl[0].type === "image/png" && Buffer.from(pl[0].data, "base64").toString() === "photo.png" && pl[0].path.endsWith("photo.png"), "the payload has the type, the bytes and the path");
+}
+
+// ---------------------------------------------------------------- an upload in a recording
+{
+  const t = Date.now();
+  const tg = (selector, role, name) => ({ selector, role, name });
+  ingest("forms.test", [
+    { kind: "nav", session: "u1", t, url: "https://forms.test/apply" },
+    { kind: "click", session: "u1", t: t + 1, url: "https://forms.test/apply", target: tg("#upload", "button", "Upload CV") },
+    { kind: "input", session: "u1", t: t + 2, url: "https://forms.test/apply", target: tg("#cvIn", "file", "cv"), value: "cv.pdf" },
+  ]);
+  const draft = draftSteps("forms.test", "u1");
+  ok(draft.map((s) => s.do).join() === "open,upload" && draft[1].name === "Upload CV" && draft[1].value === "{{file}}", "the click that opened a file dialog becomes an upload step with a {{file}} input");
+  ok(holesIn(draft).includes("file"), "and file is one of the flow's inputs");
+}
+
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(process.exitCode ? "\nSOME CHECKS FAILED" : "\nall checks passed");

@@ -46,7 +46,7 @@ Only call `request_bypass` (access to every tab) when the task really needs tabs
 ## The loop
 
 1. `snapshot`: the page as an outline. Every control you can act on has a ref like `[e14]`, with its role, name, value and state.
-2. Act by ref: `click`, `type`, `fill_form` (several fields in one call, checkboxes take true/false, selects take the option label), `select_option`, `press_key`, `hover`, `scroll`, `upload_file`.
+2. Act by ref: `click`, `type`, `fill_form` (several fields in one call, checkboxes take true/false, selects take the option label), `select_option`, `press_key`, `hover`, `scroll`, `upload_file`, `drag`.
 3. Every action returns the page. After a navigation, or when most of it changed, that is the whole outline. Otherwise it is only the lines that changed: `+` lines were added, `-` lines were removed, and the lines above them show which form or dialog they sit in. Read it to confirm the result before the next step. Don't call `snapshot` again right after an action.
 4. A ref keeps working for as long as its element is on the page, so refs from an earlier outline are fine on lines that haven't changed. After a navigation, use the refs in the new outline. "Element e14 is gone" means call `snapshot`, which always returns the whole outline.
 
@@ -55,6 +55,8 @@ More tools:
 - `read_text` for long content: articles, tables, results. It's cheaper than reading a big outline.
 - `screenshot` when layout or visuals matter, or the outline isn't enough (canvas apps, charts, image-heavy pages). Don't screenshot after every step.
 - `click_at` for what the outline can't name: a canvas app (a design tool, a spreadsheet grid, a map, a game), a custom-drawn control, a spot in a chart. Take a `screenshot` with `max_side: 1280` first, then pass `x` and `y` as pixels in that image. `to_x` and `to_y` turn it into a drag. Use `click` with a ref whenever the element is in the outline: refs don't miss.
+- `upload_file` puts files from this computer into the page without a file dialog. Point `ref` at what the user would use: the Upload or Attach button, a `drop area` line, a chat box (the files are pasted), or a `file input` line. Don't go looking for a hidden input, and never click an upload button with `click`: that opens a dialog only the user can close. If the button opens a menu ("From computer", "From Drive"), the result shows it; call `upload_file` again on the menu item. `paths` take absolute paths, `~`, `%USERPROFILE%`, a wildcard in the file name (`~/Downloads/invoice-*.pdf`), a folder, or `download:<id>` from `list_downloads`. Call it without `ref` to see which files match, newest first, before uploading. A wrong path returns files with a similar name. Keys, `.env` files, `~/.ssh` and browser profiles are refused.
+- `drag` moves one element onto another: a card to a column, an item in a list (`position: "before"` or `"after"` to reorder), a file into a folder. Items with `draggable="true"` have `draggable` lines in the outline. A target with no ref, like a column, can be given by its visible text (`to: "Done"`).
 - `run_js` to read data the outline doesn't show or call the page's own APIs. The value of the last expression comes back. Prefer the normal tools for clicking and typing so the user sees what happens.
 - `navigate` (url, back, forward, reload), `open_tab`, `close_tab`.
 
@@ -66,6 +68,7 @@ Clicks and keys arrive as real input in Chromium browsers, so sites treat them l
 
 - A CAPTCHA, a login, a 2FA or OTP code, a payment confirmation, or any choice that is theirs: call `wait_for_user` with a one-sentence `message`. The tab comes to the front with your message and a Done button, and the call returns when they press it (default wait 5 minutes). Then continue from the snapshot it returns.
 - If an action fails with "The user paused this tab", they pressed Pause to do something themselves. Call `wait_for_user` without a message to wait for Resume. Don't retry the action in a loop.
+- An upload waits for the user to press Allow on the page, which names the files and the site, unless bypass mode is on or they chose "Always here" for that site before. Find the files and the control first, so the question is the only thing left.
 - A click on a button that buys, pays, sends, posts or deletes (or Enter in such a form) waits for the user to press Allow on the page. If the call says they haven't answered yet, repeat the exact same call to keep waiting. If they declined, don't retry; ask in chat. Some sites are set to ask before every action.
 - A tab marked "read only" in `list_tabs` can be read but not acted on. If the task needs actions there, ask the user to switch it to full control in the Tether popup.
 

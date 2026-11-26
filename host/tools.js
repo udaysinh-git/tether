@@ -10,6 +10,7 @@ import { listRequests, imagesOf, resolveRequest } from "./requests.js";
 import { saveMedia, formatMedia } from "./media.js";
 import { listWatchers, getWatcher, saveWatcher, runWatcher, deleteWatcher } from "./watchers.js";
 import { saveShots } from "./gallery.js";
+import { resolveFiles, payload, fileLine, kb, BYTES_CAP } from "./files.js";
 import { ANNOTATIONS, annotationsFor, GROUPS, LOADERS, groupOf } from "./annotations.js";
 
 const tab = z.string().optional().describe('Tab handle from list_tabs, e.g. "chrome:812". Optional when only one tab is shared.');
@@ -275,17 +276,58 @@ export function registerTools(server, hub, agentName, { mode = "lazy", groups = 
     }
   );
 
+  // Which extension a browser runs, for features the host has to match.
+  const atLeast = (browser, want) => {
+    const a = String(browser?.version || "0").split(".").map(Number), b = want.split(".").map(Number);
+    for (let i = 0; i < 3; i++) if ((a[i] || 0) !== b[i]) return (a[i] || 0) > b[i];
+    return true;
+  };
+
   tool(
     "upload_file",
-    "Attach local files to a file input, as if the user picked them.",
-    { tab, ref, paths: z.array(z.string()).describe("Absolute paths on this machine.") },
+    `Upload files from this computer with no file dialog. Point ref at what the user would use: an Upload or Attach button, a drop area, a chat box that takes pasted images, or a file input. If the button opens a menu ("From computer"), call again on the menu item. Without ref it only lists the files paths match. Unless bypass mode is on or the site is allowed, the user is asked first; don't retry a declined upload.`,
+    {
+      tab,
+      ref: ref.optional().describe("Element to upload through: a button, drop area, text box or file input. Leave out to only list what paths match."),
+      paths: z.array(z.string()).min(1).describe("Absolute paths; ~, %VAR% and $VAR work, as do a wildcard in the name, a folder, or download:<id> from list_downloads. A wrong path returns similar files."),
+      via: z.enum(["input", "picker", "drop", "paste"]).optional().describe("Force one way of delivering, when the automatic choice was wrong."),
+    },
     async (a) => {
-      const files = a.paths.map((p) => {
-        const data = fs.readFileSync(p);
-        if (data.length > 25 * 1024 * 1024) throw new Error(`${p} is over 25 MB`);
-        return { name: path.basename(p), data: data.toString("base64"), type: mime(p) };
-      });
-      return act(a, "upload", { ref: a.ref, files }, `attached ${files.map((f) => f.name).join(", ")}`, ACT_MS, "upload_file");
+      const resolved = a.tab || a.ref ? hub.resolveTab(a.tab) : null;
+      const downloads = async (id) => {
+        const b = resolved ? resolved.browser : hub.pickBrowser();
+        const res = await hub.call(b, "downloads", { limit: 500 });
+        return res.list.find((d) => d.id === id);
+      };
+      const files = await resolveFiles(a.paths, { downloads });
+      if (!a.ref) {
+        const list = [...files].sort((x, y) => y.modified - x.modified);
+        return text(`${list.length === 1 ? "1 file matches" : `${list.length} files match`}, newest first. Nothing was uploaded; call again with ref to upload.\n${list.map((f) => "  " + fileLine(f)).join("\n")}`);
+      }
+      const { browser } = resolved;
+      const send = payload(files);
+      const names = files.map((f) => f.name).join(", ");
+      if (!atLeast(browser, "0.6.0")) {
+        if (send.some((f) => f.data == null)) throw new Error(`These files are over ${kb(BYTES_CAP)} together. Update the Tether extension to 0.6.0 or newer to send bigger files.`);
+        try {
+          return await act(a, "upload", { ref: a.ref, files: send.map(({ name, data, type }) => ({ name, data, type })) }, `attached ${names}`, ACT_MS, "upload_file");
+        } catch (e) {
+          if (/not a file input/.test(e.message)) throw new Error(`${e.message} The Tether extension in this browser is ${browser.version || "older than 0.6.0"}; update it to upload through buttons, drop areas and paste.`);
+          throw e;
+        }
+      }
+      return act(a, "upload", { ref: a.ref, via: a.via, files: send }, `attaching ${names}`, ACT_MS, "upload_file");
+    }
+  );
+
+  tool(
+    "drag",
+    "Drag one element onto another: move a card to a column, reorder a list, drop an item into a folder. Both ends in the same frame. For canvas points use click_at with to_x and to_y. A drop onto something that deletes asks the user first.",
+    { tab, from: z.string().describe('The element to pick up: a ref like "e14", or its exact visible text when the outline gives it no ref.'), to: z.string().describe('Where to drop it: a ref, or visible text such as a column heading ("Done").'), position: z.enum(["before", "after"]).optional().describe("Drop just before or after the target (reordering) instead of on its middle.") },
+    async (a) => {
+      const { browser } = hub.resolveTab(a.tab);
+      if (!atLeast(browser, "0.6.0")) throw new Error(`The Tether extension in this browser is ${browser.version || "older than 0.6.0"} and can't drag yet; update it. Until then, click_at with to_x and to_y drags between two points.`);
+      return act(a, "drag", { from: a.from, to: a.to, position: a.position }, "dragged an element", ACT_MS, "drag");
     }
   );
 
@@ -377,7 +419,7 @@ export function registerTools(server, hub, agentName, { mode = "lazy", groups = 
 
   // ---- downloads ----
 
-  const dl = (d) => (d ? `${d.filename || "(no file yet)"}\n  ${d.state || "in_progress"}${d.error ? ` (${d.error})` : ""}${d.bytes != null ? `, ${Math.round(d.bytes / 1024)} KB` : ""}${d.mime ? `, ${d.mime}` : ""}${d.note ? `, ${d.note}` : ""}\n  from ${d.url}` : "");
+  const dl = (d) => (d ? `${d.filename || "(no file yet)"}\n  ${d.id != null ? `download:${d.id}, ` : ""}${d.state || "in_progress"}${d.error ? ` (${d.error})` : ""}${d.bytes != null ? `, ${Math.round(d.bytes / 1024)} KB` : ""}${d.mime ? `, ${d.mime}` : ""}${d.note ? `, ${d.note}` : ""}\n  from ${d.url}` : "");
   const browserFor = (a) => (a.tab ? hub.resolveTab(a.tab).browser : hub.pickBrowser(a.browser));
 
   tool(
@@ -740,14 +782,14 @@ export function registerTools(server, hub, agentName, { mode = "lazy", groups = 
   // ---- flows
 
   const step = z.object({
-    do: z.enum(STEP_KINDS).describe("open a URL, click, type into a field, select an option, check a box, press a key, wait for text, or ask_user to do a step themselves."),
+    do: z.enum(STEP_KINDS).describe("open a URL, click, type into a field, select an option, check a box, press a key, wait for text, upload files through an element, or ask_user to do a step themselves."),
     url: z.string().optional().describe("For open."),
     selector: z.string().optional().describe("CSS selector of the element, as in site_map and site_sessions."),
     role: z.string().optional().describe("The element's role in the outline, e.g. button, link, textbox."),
     name: z.string().optional().describe("The element's visible name. Used when the selector no longer matches."),
     scope: z.array(z.string()).optional().describe("For an element inside shadow roots: selectors of the shadow hosts on the way down, outermost first, as a recording gives them. Without it every shadow root is searched."),
     frame: z.string().optional().describe("For an element inside an embedded frame from another site: part of that frame's address, e.g. \"pay.example.com\". Without it the page is searched first, then every frame."),
-    value: z.union([z.string(), z.boolean()]).optional().describe("Text to type, option to select, or true/false for check."),
+    value: z.union([z.string(), z.boolean()]).optional().describe("Text to type, option to select, true/false for check, or for upload the file path (usually an input like {{file}}; ~, wildcards and folders work as in upload_file)."),
     submit: z.boolean().optional().describe("For type: press Enter afterwards."),
     key: z.string().optional().describe('For press, e.g. "Enter".'),
     text: z.string().optional().describe("For wait: text that must appear."),
@@ -870,7 +912,3 @@ function short(url) {
   try { const u = new URL(url); return u.host + (u.pathname === "/" ? "" : u.pathname); } catch { return url; }
 }
 
-const MIME = { pdf: "application/pdf", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", txt: "text/plain", csv: "text/csv", json: "application/json", zip: "application/zip", doc: "application/msword", docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", mp4: "video/mp4", mp3: "audio/mpeg", svg: "image/svg+xml", html: "text/html" };
-function mime(p) {
-  return MIME[path.extname(p).slice(1).toLowerCase()] || "application/octet-stream";
-}

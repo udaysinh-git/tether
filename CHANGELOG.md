@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.0 (unreleased)
+
+- Uploads without a file dialog. `upload_file` takes whatever the user would use: a file input, a button that opens a file dialog (Tether catches the dialog and fills it, also for inputs made on the fly and `showPicker()`), a drop area, or a chat box that takes pasted files. A button that opens a menu first returns the menu, so the agent can pick "From computer". Before, an upload button opened the system dialog and the agent had to hand over to you.
+- Paths can use `~`, `%USERPROFILE%` and `$HOME`, a wildcard in the file name, a folder, or `download:<id>` from `list_downloads`. `upload_file` without a ref lists what the paths match, and a wrong path comes back with files of a similar name. Keys, `.env` files, `~/.ssh`, `~/.tether` and browser profiles are refused.
+- Every upload asks first, naming the files, their size and the site, unless bypass mode is on or the site is set to never ask. A third button, **Always here**, stops the question on that site; **Ask again** in the popup brings it back. Before, uploads asked only on sites set to ask before every action.
+- In Chromium with **Allow access to file URLs** on, the browser reads uploads from disk itself: no size limit, and the page sees real input. Without it, files of up to 50 MB at a time are sent from the host.
+- Fixed: messages over 1 MB from the bridge were dropped by the browser, so uploads over about 750 KB failed in Firefox and in keyless Chrome. The bridge now sends big messages in parts.
+- `drag` moves one element onto another, with `position` before or after for reordering. It handles HTML5 drag and drop through the debugger in Chromium, and drag libraries that wait for a short hold; either end can be named by its visible text. A drop onto Delete or Trash asks first.
+- `click_at` drags move like a hand now: a short hold, then small steps a frame apart, so drag libraries with an activation delay notice them.
+- The outline gives drop areas and `draggable="true"` items a ref.
+- Flows have an `upload` step, and a recording where the user picked a file drafts one with a `{{file}}` input in place of the click that opened the dialog.
+
 ## 0.5.0 (2026-11-24)
 
 - `tether setup` does the setup. It finds Claude Code, Codex, Cursor and OpenCode, adds Tether to each one's MCP config, links the skill and registers the browser bridge. It changes one entry per file, keeps comments and other settings, and prints the snippet for any file it can't edit safely. `tether setup --print` shows the config without writing it, as before.

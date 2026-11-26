@@ -194,6 +194,8 @@ Before the agent clicks a button that buys, pays, sends, posts, deletes or confi
 
 If you decline, the agent gets an error telling it not to retry. A tool call waits up to 45 seconds, because agents give up on longer calls; the question stays on screen for five minutes, and the agent's next identical call picks up your answer. The check reads button and form labels only, so it is predictable: cookie banners and a plain "Cancel" don't trigger it.
 
+Uploads always ask unless bypass mode is on or you chose **Always here** for the site (see [Uploads and drag and drop](#uploads-and-drag-and-drop)).
+
 Each site can be set from the popup to ask before risky actions (the default), before every action, or never. **Ask before risky actions** in settings turns the default off everywhere.
 
 ### The side panel
@@ -204,13 +206,30 @@ Each site can be set from the popup to ask before risky actions (the default), b
 
 ### Reading and acting
 
-`snapshot` gives the agent the page as an outline: headings, text and every control, each with a ref like `[e14]`. It acts by ref with `click`, `type`, `fill_form`, `select_option`, `press_key`, `hover`, `scroll` and `upload_file`. Each action returns the page again: the whole outline after a navigation, and otherwise only the lines that changed, under the form or dialog they sit in. Refs stay valid while their element is on the page, so the agent keeps working from what it already has. On a long page that makes each step a few lines instead of a few hundred. Content inside cross-origin iframes (payment forms, embedded forms, widgets) is part of the outline, with refs like `[f12.e5]` that work in every tool.
+`snapshot` gives the agent the page as an outline: headings, text and every control, each with a ref like `[e14]`. It acts by ref with `click`, `type`, `fill_form`, `select_option`, `press_key`, `hover`, `scroll`, `upload_file` and `drag`. Each action returns the page again: the whole outline after a navigation, and otherwise only the lines that changed, under the form or dialog they sit in. Refs stay valid while their element is on the page, so the agent keeps working from what it already has. On a long page that makes each step a few lines instead of a few hundred. Content inside cross-origin iframes (payment forms, embedded forms, widgets) is part of the outline, with refs like `[f12.e5]` that work in every tool.
 
 In Chromium, Tether uses the browser's debugger, so clicks and keystrokes arrive as real input, scripts run on pages with strict security policies, and the network log includes response bodies. Chromium shows a "started debugging this browser" bar while that is active. Firefox has no debugger API, so there clicks and typing are DOM events, which nearly every site accepts.
 
 ### Pages the outline can't describe
 
 Canvas apps (design tools, a spreadsheet's grid, maps, games) draw their own controls, so there is nothing in the outline to give a ref to. For those the agent takes a `screenshot` and calls `click_at` with a point in that image, or two points for a drag. Tether maps the point onto the page whatever the zoom or screen density. In Chromium it is real input; in Firefox it is DOM pointer events at that point. A point on a button that buys, sends or deletes waits for your Allow like any other click.
+
+### Uploads and drag and drop
+
+The agent uploads files from your computer without opening a file dialog. It points `upload_file` at whatever you would use, and Tether works out the rest:
+
+- a file input, including hidden ones and invisible inputs laid over a styled button, gets the files set directly;
+- a button that opens a file dialog is clicked with the dialog caught, and the dialog's input gets the files (also when the page makes the input on the fly or calls `showPicker()`);
+- a drop area ("Drag files here", shown as a `drop area` line in the outline) gets the files dropped on it;
+- a chat box gets them pasted, without touching your clipboard.
+
+If a button opens a menu first ("From computer", "From Drive"), the agent sees the menu and picks the item. It can give paths with `~`, `%USERPROFILE%`, a wildcard in the name, a whole folder, or `download:<id>` for something it just downloaded, and a wrong path comes back with files of a similar name. Keys, `.env` files, `~/.ssh`, Tether's own folder and browser profiles are never uploaded.
+
+Before an upload the status panel asks, naming the files, their size and the site: **Deny**, **Allow**, or **Always here** to stop asking on that site (the popup has an **Ask again** link to undo it). In bypass mode, or on a site set to never ask, uploads go through without a question.
+
+In Chrome, files of up to 50 MB at a time travel from the host to the extension. Turning on **Allow access to file URLs** on Tether's Details page in `chrome://extensions` lets the browser read files from disk itself instead, which removes the limit and makes the page see the upload as real input. It is optional; uploads work without it.
+
+`drag` moves one element onto another: a card to another column, an item up or down a list (`position` before or after), a file into a folder. It handles HTML5 drag and drop and the drag libraries that wait for a short hold before a drag starts. Items marked draggable get their own lines in the outline, and a target with no ref, like a board column, can be named by its visible text. A drop onto something labelled delete or trash waits for your Allow.
 
 ### Tools that load when needed
 
@@ -340,7 +359,8 @@ Ask for something like "tell me when this drops below 2,000" or "when the result
 | `snapshot`, `read_text` | The page as an outline with refs; plain visible text |
 | `click`, `hover`, `type`, `fill_form`, `select_option` | Act on elements by ref |
 | `press_key`, `scroll`, `wait_for` | Keys and shortcuts, scrolling, waiting for text to appear or go |
-| `upload_file` | Attach files from disk to a file input, including hidden ones |
+| `upload_file` | Upload files from disk through a file input, an upload button, a drop area or a chat box, with no file dialog; without a ref, list the files a path matches |
+| `drag` | Drag one element onto another: reorder a list, move a card to a column |
 | `navigate`, `open_tab`, `close_tab` | Move around and manage tabs |
 | `screenshot`, `run_js` | An image of the tab; JavaScript in the page's own context |
 | `click_at` | Click or drag at a point in the latest screenshot, for canvas apps |
@@ -466,9 +486,9 @@ npm run sign:firefox    # signed unlisted .xpi (needs the AMO API key)
 npm run doctor
 ```
 
-The tests load the built extension into Playwright's Chromium, serve test pages, connect an MCP client through the stdio shim and drive every tool: sharing, the outline, forms, real clicks, network and console capture, sessions, bypass, pausing, cross-origin iframes, media, downloads, picked elements, requests, styles and scripts, recording and the site map, watchers, gallery screenshots, sharing that survives an extension reload, read-only tabs, Allow and Deny from the page, popup and side panel, the per-site ask setting, outline diffs, `click_at` and flows. `unit.mjs` checks what `tether setup` writes into each agent's config, and `tools.mjs` checks every tool's annotations and the loading of tool groups; neither needs a browser. `--fallback` repeats a suite without the debugger. `native.mjs` connects the shipped Chromium build through the bridge with no key.
+The tests load the built extension into Playwright's Chromium, serve test pages, connect an MCP client through the stdio shim and drive every tool: sharing, the outline, forms, real clicks, network and console capture, sessions, bypass, pausing, cross-origin iframes, media, downloads, picked elements, requests, styles and scripts, recording and the site map, watchers, gallery screenshots, sharing that survives an extension reload, read-only tabs, Allow and Deny from the page, popup and side panel, the per-site ask setting, outline diffs, `click_at` and flows. `uploads.mjs` covers every kind of upload control and the question before an upload, three ways: by path through the debugger, with bytes through the debugger (`--bytes`), and in the page's world (`--fallback`). `drag.mjs` covers HTML5 drag and drop, a drag library with a delay, reordering and the question before a drop on Delete. `unit.mjs` checks what `tether setup` writes into each agent's config, and `tools.mjs` checks every tool's annotations and the loading of tool groups; neither needs a browser. `--fallback` repeats a suite without the debugger. `native.mjs` connects the shipped Chromium build through the bridge with no key.
 
-`firefox.mjs` runs the Firefox build in a real Firefox, which Playwright can't do (its Firefox doesn't load extensions): Selenium downloads stock Firefox and geckodriver the first time, and the test drives the extension through its own pages and prompt windows. It covers what only Firefox does: connecting through the bridge, DOM-event clicks and typing, the webRequest network log with response bodies, console capture from the first moment of a page load, `run_js` and saved scripts through the user scripts API, styles, Allow and Deny, read-only and paused tabs, downloads, recording, flows, `click_at`, and the window that asks before an agent starts a session. Set `TETHER_FIREFOX` to run it in Zen or another fork. Both bridge tests register the bridge under a name or browser of their own and remove it afterwards, so an installed Tether is left alone. `npx web-ext lint -s dist/firefox` checks the manifest.
+`firefox.mjs` runs the Firefox build in a real Firefox, which Playwright can't do (its Firefox doesn't load extensions): Selenium downloads stock Firefox and geckodriver the first time, and the test drives the extension through its own pages and prompt windows. It covers what only Firefox does: connecting through the bridge, DOM-event clicks and typing, the webRequest network log with response bodies, console capture from the first moment of a page load, `run_js` and saved scripts through the user scripts API, styles, Allow and Deny, read-only and paused tabs, uploads (a 3 MB file through a caught file picker, which also checks that big messages cross the bridge in parts), drops and paste, downloads, recording, flows, `click_at`, and the window that asks before an agent starts a session. Set `TETHER_FIREFOX` to run it in Zen or another fork. Both bridge tests register the bridge under a name or browser of their own and remove it afterwards, so an installed Tether is left alone. `npx web-ext lint -s dist/firefox` checks the manifest.
 
 ## Known limits
 

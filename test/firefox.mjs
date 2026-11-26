@@ -46,6 +46,9 @@ const page = () => `<!doctype html><html><head><title>Shop</title></head><body s
   <button id="buy" type="button">Buy now</button>
 </form>
 <p id="out">idle</p>
+<p><button id="receipt" type="button">Attach receipt</button></p>
+<div id="dropzone" style="width:260px;height:60px;border:2px dashed #888">Drop receipts here</div>
+<div id="chat" contenteditable="true" role="textbox" aria-label="Chat" style="width:260px;height:30px;border:1px solid #888"></div>
 <canvas id="board" width="240" height="120" style="display:block;background:#ccc"></canvas>
 <div id="notes"></div>
 <a id="dl" href="/report.csv">Download report</a>
@@ -60,6 +63,12 @@ const page = () => `<!doctype html><html><head><title>Shop</title></head><body s
   const sr = v('notes').attachShadow({ mode: 'open' });
   sr.innerHTML = '<button id="note" type="button">Add note</button>';
   sr.getElementById('note').addEventListener('click', () => { out.textContent = 'noted'; });
+  window.got = {};
+  const gotFiles = (k, files, e) => { window.got[k] = [...files].map((f) => f.name + ':' + f.size).join(',') + ':trusted=' + e.isTrusted; };
+  v('receipt').addEventListener('click', () => { const i = document.createElement('input'); i.type = 'file'; i.addEventListener('change', (e) => gotFiles('receipt', i.files, e)); i.click(); });
+  v('dropzone').addEventListener('dragover', (e) => e.preventDefault());
+  v('dropzone').addEventListener('drop', (e) => { e.preventDefault(); gotFiles('drop', e.dataTransfer.files, e); });
+  v('chat').addEventListener('paste', (e) => { if (e.clipboardData.files.length) { e.preventDefault(); gotFiles('paste', e.clipboardData.files, e); } });
   window.shopSecret = 'page-world-42';
   console.log('shop ready');
   fetch('/api/stock').then((r) => r.json()).then((j) => { window.stock = j.left; });
@@ -303,6 +312,27 @@ try {
   await msg({ type: "resume", tabId });
   t = await waiting;
   ok(/The user resumed/.test(t.text), "wait_for_user returns when the user resumes");
+
+  // ---- uploads: no file dialog, the bridge carries a 3 MB file in parts
+  const upDir = path.join(home, "up");
+  fs.mkdirSync(upDir);
+  const receipt = path.join(upDir, "receipt.pdf");
+  fs.writeFileSync(receipt, Buffer.alloc(3 * 1024 * 1024, 5));
+  const photo = path.join(upDir, "photo.png");
+  fs.writeFileSync(photo, Buffer.alloc(1500, 1));
+  const got = (k) => onPage("return window.got[arguments[0]] || '';", k);
+  snap = (await call("snapshot", { tab: handle })).text;
+  const upload = call("upload_file", { tab: handle, ref: ref("Attach receipt", snap), paths: [receipt] });
+  question = await asked(tabId);
+  ok(/attach receipt\.pdf \(3\.0 MB\) to 127\.0\.0\.1/.test(question?.action || "") && question?.kind === "upload", "an upload asks first, naming the file and its size");
+  await msg({ type: "confirmAnswer", tabId, id: question.id, allow: true, always: true });
+  t = await upload;
+  ok(/Filled the file picker that button “Attach receipt” opened with receipt.pdf/.test(t.text) && (await got("receipt")) === "receipt.pdf:3145728:trusted=false", "a button that opens a file picker gets the file without a dialog, 3 MB through the bridge");
+  t = await call("upload_file", { tab: handle, ref: ref("Drop receipts here", snap), paths: [photo] });
+  ok(/Dropped photo.png/.test(t.text) && (await got("drop")).startsWith("photo.png:1500"), "a drop area gets a drop, and Always here skipped the question");
+  t = await call("upload_file", { tab: handle, ref: ref("Chat", snap), paths: [photo] });
+  ok(/Pasted photo.png/.test(t.text) && (await got("paste")).startsWith("photo.png:1500"), "a text box gets the file pasted (Firefox fills the event's own clipboard)");
+  ok(await onPage("return HTMLInputElement.prototype.click.toString().includes('native code') && !document.querySelector('[data-tether-mark]');"), "nothing is left on the page afterwards");
 
   // ---- downloads
   await call("click", { tab: handle, ref: ref("Download report", snap) });

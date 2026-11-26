@@ -176,6 +176,8 @@ try {
   const upPath = path.join(home, "avatar.txt");
   fs.writeFileSync(upPath, "hello");
   const avatar = snap.match(/"Avatar"[^\n]*?\[(e\d+)\]/)?.[1];
+  // Uploads ask first; this suite allows them on the test site (test/uploads.mjs covers asking).
+  await sw.evaluate(async (host) => chrome.storage.local.set({ siteUploads: { [host]: true } }), new URL(site).host);
   await call("upload_file", { ref: avatar, paths: [upPath] });
   t = await call("run_js", { code: "(() => { const f = document.querySelector('input[type=file]').files[0]; return f && f.name + ':' + f.size; })()" });
   ok(/avatar\.txt:5/.test(t.text), "upload_file attaches a local file");

@@ -6,6 +6,7 @@
 import WebSocket from "ws";
 import { loadConfig } from "./config.js";
 import { ensureDaemon } from "./shim.js";
+import { parts } from "./bridge-parts.js";
 
 const cfg = loadConfig();
 
@@ -13,11 +14,14 @@ const cfg = loadConfig();
 const args = process.argv.slice(2);
 const origin = args.find((a) => a.startsWith("chrome-extension://"))?.replace(/\/$/, "") || `moz-extension://${args.find((a) => /@|^\{/.test(a)) || "tether"}`;
 
-function write(obj) {
-  const body = Buffer.from(JSON.stringify(obj));
+function frame(body) {
   const head = Buffer.alloc(4);
   head.writeUInt32LE(body.length);
   process.stdout.write(Buffer.concat([head, body]));
+}
+
+function write(obj) {
+  for (const body of parts(Buffer.from(JSON.stringify(obj)))) frame(body);
 }
 
 let ws = null;

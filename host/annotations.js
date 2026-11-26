@@ -39,7 +39,8 @@ export const ANNOTATIONS = {
   press_key: write("Press a key", { destructive: true, openWorld: true }),
   scroll: write("Scroll the page", { openWorld: true }),
   run_js: write("Run JavaScript in the page", { destructive: true, openWorld: true }),
-  upload_file: write("Attach files to an input", { idempotent: true, openWorld: true }),
+  upload_file: write("Upload files from this computer", { openWorld: true }),
+  drag: write("Drag an element onto another", { destructive: true, openWorld: true }),
   click_at: write("Click at a point", { destructive: true, openWorld: true }),
 
   // tools that stay out of the agent's context until it asks for them
@@ -105,7 +106,7 @@ export const ANNOTATIONS = {
 export const GROUPS = {
   core: {
     about: "tabs and sessions, reading pages, clicking, typing, screenshots, running JavaScript",
-    tools: ["list_tabs", "open_tab", "close_tab", "navigate", "start_session", "end_session", "request_bypass", "wait_for_user", "snapshot", "read_text", "wait_for", "screenshot", "click", "hover", "type", "fill_form", "select_option", "press_key", "scroll", "run_js", "upload_file", "click_at"],
+    tools: ["list_tabs", "open_tab", "close_tab", "navigate", "start_session", "end_session", "request_bypass", "wait_for_user", "snapshot", "read_text", "wait_for", "screenshot", "click", "hover", "type", "fill_form", "select_option", "press_key", "scroll", "run_js", "upload_file", "drag", "click_at"],
   },
   devtools: {
     about: "the network log with request and response bodies, console output and errors, cookies",

@@ -139,8 +139,10 @@ class NativeSocket {
   constructor() {
     this.readyState = 0;
     this.port = api.runtime.connectNative("tether");
+    this.parts = new Map(); // id -> [part]: a message over 1 MB arrives in pieces
     this.port.onMessage.addListener((m) => {
       if (m?.type === "bridge") {
+        if (m.part) return this.joinPart(m.part);
         if (m.open) { this.readyState = 1; this.onopen?.(); }
         if (m.error) this.error = m.error;
         if (m.closed) this.closeCode = m.closed;
@@ -154,6 +156,20 @@ class NativeSocket {
       const err = p?.error?.message || api.runtime.lastError?.message || this.error || "";
       this.onclose?.({ code: this.closeCode || (/native/i.test(err) ? 4404 : 1006), reason: err });
     });
+  }
+  // host/bridge-parts.js splits a big message into base64 slices of its UTF-8
+  // text. Decode only once every slice is here: a slice can end mid-character.
+  joinPart(p) {
+    const list = this.parts.get(p.id) || [];
+    list[p.i] = p.data;
+    this.parts.set(p.id, list);
+    if (list.filter((x) => x != null).length < p.n) return;
+    this.parts.delete(p.id);
+    const chunks = list.map((d) => Uint8Array.from(atob(d), (c) => c.charCodeAt(0)));
+    const bytes = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0));
+    let at = 0;
+    for (const c of chunks) { bytes.set(c, at); at += c.length; }
+    this.onmessage?.({ data: new TextDecoder().decode(bytes) });
   }
   send(s) {
     this.port.postMessage(JSON.parse(s));
@@ -542,11 +558,11 @@ async function waitUser(tabId, { agent, message, timeout = 300000, keep = false 
 
 // ---------------------------------------------------------------- read only + asking first
 // Actions that change a page. A read-only tab refuses them all.
-const ACTING = new Set(["click", "clickAt", "hover", "type", "fill", "select", "press", "upload", "runJs", "runItem", "previewCss", "navigate", "closeTab", "styleShots"]);
+const ACTING = new Set(["click", "clickAt", "hover", "type", "fill", "select", "press", "upload", "drag", "runJs", "runItem", "previewCss", "navigate", "closeTab", "styleShots"]);
 // Actions the user can be asked to allow first. Risky ones (a button that
 // buys, sends, posts or deletes; Enter in such a form) ask by default; a site
 // set to "every action" asks for all of these, and "never" trusts the site.
-const ASKABLE = new Set(["click", "clickAt", "type", "fill", "select", "press", "upload", "runJs", "runItem", "navigate", "closeTab"]);
+const ASKABLE = new Set(["click", "clickAt", "type", "fill", "select", "press", "upload", "drag", "runJs", "runItem", "navigate", "closeTab"]);
 // MCP clients give up on a tool call after about a minute (Codex's default is
 // 60 s), so one call waits at most WAIT_MS. The question stays on screen for
 // QUESTION_MS; calling the same action again picks it back up, and an answer
@@ -563,6 +579,21 @@ async function siteAsk(host) {
   const { siteAsk: map = {}, askRisky } = await api.storage.local.get(["siteAsk", "askRisky"]);
   return map[host] || (askRisky === false ? "never" : "risky");
 }
+
+// Sites where the user chose "Always allow uploads here".
+async function uploadsAllowed(host) {
+  const { siteUploads: map = {} } = await api.storage.local.get("siteUploads");
+  return !!map[host];
+}
+
+async function setUploadsAllowed(host, on) {
+  const { siteUploads: map = {} } = await api.storage.local.get("siteUploads");
+  if (on) map[host] = true;
+  else delete map[host];
+  await api.storage.local.set({ siteUploads: map });
+}
+
+const sizeText = (n) => (n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
 
 async function setSiteAsk(host, value) {
   const { siteAsk: map = {} } = await api.storage.local.get("siteAsk");
@@ -585,6 +616,7 @@ function describeAction(method, p, what) {
     case "select": return `choose ${(p.values || []).map((v) => `“${v}”`).join(", ")}`;
     case "press": return `press ${p.key}${what ? ` in ${what}` : ""}`;
     case "upload": return `attach ${p.files?.length || 0} file${p.files?.length === 1 ? "" : "s"}`;
+    case "drag": return `drag something onto ${what || "an element"}`;
     case "runJs": return "run JavaScript on this page";
     case "runItem": return "run a saved script on this page";
     case "navigate": return p.url ? `go to ${shortUrl(p.url)}` : p.action === "reload" || !p.action ? "reload the page" : `go ${p.action}`;
@@ -596,19 +628,34 @@ function describeAction(method, p, what) {
 async function gate(tabId, method, p) {
   const open = state.confirming.get(tabId);
   const tab = await api.tabs.get(tabId).catch(() => null);
-  const mode = await siteAsk(hostOf(tab?.url || ""));
+  const host = hostOf(tab?.url || "");
+  const mode = await siteAsk(host);
+  // Sending a file from this computer to a website always asks, unless bypass
+  // mode is on or the user allowed uploads on this site (or never asks here).
+  if (method === "upload") {
+    if (state.bypass || mode === "never" || (await uploadsAllowed(host))) {
+      if (open) throw new Error(STILL_DECIDING);
+      return;
+    }
+    const fr = splitRef(p.ref);
+    const target = await toContent(tabId, { cmd: "risk", ref: fr.ref, kind: "click" }, true, fr.frameId).catch(() => null);
+    const files = p.files || [];
+    const list = files.length <= 3 ? files.map((f) => `${f.name}${f.size != null ? ` (${sizeText(f.size)})` : ""}`).join(", ") : `${files.length} files (${sizeText(files.reduce((n, f) => n + (f.size || 0), 0))})`;
+    await confirmAction(tabId, p.agent, `attach ${list} to ${host || "this page"}`, target?.what ? `through ${target.what}` : "", p.askWaitMs, { kind: "upload", host });
+    return;
+  }
   if (mode === "never" || !ASKABLE.has(method)) {
     if (open) throw new Error(STILL_DECIDING);
     return;
   }
   let kind = null;
-  if (method === "click" || method === "clickAt") kind = "click";
+  if (method === "click" || method === "clickAt" || method === "drag") kind = "click";
   else if (method === "type" && p.submit) kind = "submit";
   else if (method === "press" && p.ref && /(^|\+)Enter$/i.test(p.key || "")) kind = "submit";
   let risk = null;
   if (method === "clickAt") risk = await riskAt(tabId, p.x, p.y);
   else if (kind || (mode === "all" && p.ref)) {
-    const fr = splitRef(p.ref);
+    const fr = splitRef(method === "drag" ? p.to : p.ref);
     risk = await toContent(tabId, { cmd: "risk", ref: fr.ref, kind: kind || "click" }, true, fr.frameId).catch(() => null);
   }
   if (!(mode === "all" || (kind && risk?.risky))) {
@@ -631,7 +678,7 @@ async function riskAt(tabId, x, y, frameId = 0, depth = 0) {
 
 const declined = (action) => new Error(`The user declined: ${action}. Don't retry it; ask them in chat if it still matters.`);
 
-async function confirmAction(tabId, agent, action, reason, waitMs) {
+async function confirmAction(tabId, agent, action, reason, waitMs, extra = {}) {
   // Answered while the agent's previous call had already given up waiting.
   const done = answered.get(tabId);
   answered.delete(tabId);
@@ -642,7 +689,7 @@ async function confirmAction(tabId, agent, action, reason, waitMs) {
   let c = state.confirming.get(tabId);
   if (c && c.action !== action) throw new Error(STILL_DECIDING);
   if (!c) {
-    c = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), agent: agent || "Your agent", action, reason: reason || "", since: Date.now() };
+    c = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), agent: agent || "Your agent", action, reason: reason || "", since: Date.now(), kind: extra.kind || "", host: extra.host || "" };
     state.confirming.set(tabId, c);
     c.expire = setTimeout(() => expireConfirm(tabId, c.id), QUESTION_MS);
     pushFeed(tabId, c.agent, `asked to ${action}`, "ask");
@@ -664,7 +711,7 @@ async function confirmAction(tabId, agent, action, reason, waitMs) {
 }
 
 // The parts of a question the page, popup and panel may see.
-const publicConfirm = (c) => (c ? { id: c.id, agent: c.agent, action: c.action, reason: c.reason, since: c.since } : null);
+const publicConfirm = (c) => (c ? { id: c.id, agent: c.agent, action: c.action, reason: c.reason, since: c.since, kind: c.kind, host: c.host } : null);
 
 function closeConfirm(tabId, c) {
   clearTimeout(c.expire);
@@ -672,10 +719,12 @@ function closeConfirm(tabId, c) {
   toContent(tabId, { cmd: "confirm", confirm: null }, false).catch(() => {});
 }
 
-function answerConfirm(tabId, allow) {
+function answerConfirm(tabId, allow, always) {
   const c = state.confirming.get(tabId);
   if (!c) return false;
   closeConfirm(tabId, c);
+  // "Always allow uploads here" on an upload question.
+  if (allow && always && c.kind === "upload" && c.host) setUploadsAllowed(c.host, true).catch(() => {});
   pushFeed(tabId, "You", `${allow ? "allowed" : "declined"}: ${c.action}`, allow ? "allow" : "deny");
   const waiting = confirmWaiters.get(tabId) || [];
   confirmWaiters.delete(tabId);
@@ -701,8 +750,8 @@ function expireConfirm(tabId, id) {
 // this browser session only.
 const FEED_MAX = 200;
 // Tools whose finished result (from the page) is a better line than the host's summary.
-const FEED_FROM_RESULT = new Set(["click", "click_at", "hover", "type", "fill_form", "select_option", "press_key", "scroll", "upload_file", "navigate"]);
-const FEED_METHODS = new Set(["click", "clickAt", "hover", "type", "fill", "select", "press", "scroll", "upload", "navigate"]);
+const FEED_FROM_RESULT = new Set(["click", "click_at", "hover", "type", "fill_form", "select_option", "press_key", "scroll", "upload_file", "drag", "navigate"]);
+const FEED_METHODS = new Set(["click", "clickAt", "hover", "type", "fill", "select", "press", "scroll", "upload", "drag", "navigate"]);
 let feedTimer;
 
 function pushFeed(tabId, agent, text, kind = "act") {
@@ -1545,6 +1594,12 @@ if (HAS_CDP) {
         pushConsole(tabId, { level: "error", text: d.exception?.description || d.text, at: p.timestamp, source: d.url && `${d.url}:${d.lineNumber + 1}` });
         break;
       }
+      case "Page.fileChooserOpened":
+        chooserWaiters.get(tabId)?.(p);
+        break;
+      case "Input.dragIntercepted":
+        dragWaiters.get(tabId)?.(p.data);
+        break;
       case "Log.entryAdded":
         pushConsole(tabId, { level: p.entry.level, text: p.entry.text, at: p.entry.timestamp, source: p.entry.url });
         break;
@@ -1804,6 +1859,10 @@ async function runCall(method, p) {
         return { note: pt.note };
       }
       break;
+    case "upload":
+      return upload(tabId, p);
+    case "drag":
+      return drag(tabId, p);
     case "runJs":
       return { value: await runJs(tabId, p.code) };
     case "network":
@@ -1895,14 +1954,432 @@ async function findElement(tabId, p) {
   throw last;
 }
 
-async function cdpDrag(tabId, x, y, toX, toY) {
-  await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
-  await cdp(tabId, "Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", buttons: 1, clickCount: 1 });
-  for (let i = 1; i <= 10; i++) {
-    await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", x: x + ((toX - x) * i) / 10, y: y + ((toY - y) * i) / 10, button: "left", buttons: 1 });
-    await sleep(12);
+// ---------------------------------------------------------------- uploads
+// The agent points at whatever the user would use and Tether delivers the
+// files without a file dialog: fill the file input, catch the picker a button
+// opens and fill that, drop them on a drop area, or paste them into a text box.
+// Chromium with the debugger catches the picker itself and, when the user
+// allowed file access, lets the browser read the files from disk (trusted
+// events, no size limit). Everywhere else the bytes come from the host and a
+// short page-world function does the work.
+
+const PICKER_WAIT_MS = 2500;
+const chooserWaiters = new Map(); // tabId -> resolve(event params)
+
+let NO_FILE_ACCESS = false; // let: the tests turn the path route off
+async function fileAccess() {
+  if (NO_FILE_ACCESS) return false;
+  try { return !!(await api.extension?.isAllowedFileSchemeAccess?.()); } catch { return false; }
+}
+
+const fileNames = (files) => files.map((f) => f.name).join(", ");
+
+async function upload(tabId, p) {
+  const files = p.files || [];
+  if (!files.length) throw new Error("No files to upload.");
+  const fr = splitRef(p.ref);
+  const t = await toContent(tabId, { cmd: "uploadTarget", ref: fr.ref, via: p.via }, true, fr.frameId);
+  // The debugger's events and input only reach the top frame's process, so a
+  // ref inside another site's frame always takes the page-world way.
+  const top = fr.frameId === 0;
+  const useCdp = top && state.cdp.has(tabId);
+  const byPath = useCdp && files.every((f) => f.path) && (await fileAccess());
+  if (!byPath && files.some((f) => f.data == null)) {
+    await toContent(tabId, { cmd: "uploadDone", marker: t.marker }, false, fr.frameId).catch(() => {});
+    throw new Error(`${fileNames(files.filter((f) => f.data == null))} ${files.length === 1 ? "is" : "are"} too big to send through the extension (50 MB at a time). In Chrome, turning on “Allow access to file URLs” on Tether's Details page in chrome://extensions lets the browser read big files itself.`);
   }
-  await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseReleased", x: toX, y: toY, button: "left", buttons: 0, clickCount: 1 });
+  const page = (action, opts = {}) => pageUpload(tabId, fr.frameId, action, t.marker, files, opts);
+  let note;
+  try {
+    switch (t.kind) {
+      case "input":
+        note = await fillInput(tabId, t, files, byPath, page);
+        break;
+      case "paste": {
+        const r = await page("paste");
+        note = `Pasted ${fileNames(r.files)} into ${t.what}${r.taken ? "" : " (the page didn't react to the paste; check that it took them)"}`;
+        break;
+      }
+      case "drop":
+        note = await dropFiles(tabId, t, files, byPath, useCdp, page, true);
+        break;
+      case "click":
+        // No picker: the click may have opened a menu ("From computer"),
+        // which the outline that comes back shows.
+        note = (await viaPicker(tabId, t, files, byPath, useCdp, page)) || `Clicked ${t.what}, but no file picker opened, so nothing is uploaded yet. If it opened a menu, call upload_file on the item that picks a file from the computer.`;
+        break;
+      default:
+        // Not a button, field or input: a drop area if it takes a drag.
+        // Clicking something that isn't clickable could toggle or open
+        // anything, so that is left to an explicit via "picker".
+        note = await dropFiles(tabId, t, files, byPath, useCdp, page, false);
+    }
+  } finally {
+    await toContent(tabId, { cmd: "uploadDone", marker: t.marker, note }, false, fr.frameId).catch(() => {});
+  }
+  if (!note) {
+    const h = await toContent(tabId, { cmd: "uploadHints" }, false, fr.frameId).catch(() => ({ inputs: [], areas: [] }));
+    const where = [...h.inputs, ...h.areas];
+    throw new Error(`${t.what} didn't take the files: it isn't a file input, a button or a drop area.${where.length ? ` Places on this page that might:\n  ${where.join("\n  ")}` : " Nothing on this page looks like an upload control; it may appear after another step."}`);
+  }
+  await settle(tabId);
+  return { note };
+}
+
+async function fillInput(tabId, t, files, byPath, page) {
+  const list = t.input?.multiple ? files : files.slice(0, 1);
+  const extra = files.length > list.length ? ` (it takes one file, so ${fileNames(files.slice(1))} ${files.length === 2 ? "was" : "were"} left out)` : "";
+  if (byPath) {
+    const node = await markedNode(tabId, t.marker);
+    if (node) {
+      await cdp(tabId, "DOM.setFileInputFiles", { objectId: node, files: list.map((f) => f.path) });
+      return `Attached ${fileNames(list)} to ${t.input?.what || t.what}${extra}`;
+    }
+  }
+  await page("input", { single: !t.input?.multiple });
+  return `Attached ${fileNames(list)} to ${t.input?.what || t.what}${extra}`;
+}
+
+// Clicks the element with the picker caught. Returns null when no picker opened.
+async function viaPicker(tabId, t, files, byPath, useCdp, page) {
+  if (useCdp) {
+    let ev;
+    await cdp(tabId, "Page.setInterceptFileChooserDialog", { enabled: true });
+    try {
+      const opened = new Promise((resolve) => {
+        const timer = setTimeout(() => { chooserWaiters.delete(tabId); resolve(null); }, PICKER_WAIT_MS);
+        chooserWaiters.set(tabId, (e) => { clearTimeout(timer); chooserWaiters.delete(tabId); resolve(e); });
+      });
+      await cdpMouse(tabId, t.x, t.y, 1);
+      ev = await opened;
+      if (ev) {
+        const list = ev.mode === "selectSingle" ? files.slice(0, 1) : files;
+        if (byPath) await cdp(tabId, "DOM.setFileInputFiles", { backendNodeId: ev.backendNodeId, files: list.map((f) => f.path) });
+        else {
+          const { object } = await cdp(tabId, "DOM.resolveNode", { backendNodeId: ev.backendNodeId });
+          await cdp(tabId, "Runtime.callFunctionOn", { objectId: object.objectId, functionDeclaration: FILL_INPUT, arguments: [{ value: list.map(({ name, type, data }) => ({ name, type, data })) }], awaitPromise: true });
+        }
+        const extra = list.length < files.length ? ` (it takes one file, so ${fileNames(files.slice(1))} ${files.length === 2 ? "was" : "were"} left out)` : "";
+        return `Filled the file picker that ${t.what} opened with ${fileNames(list)}${extra}`;
+      }
+    } finally {
+      await cdp(tabId, "Page.setInterceptFileChooserDialog", { enabled: false }).catch(() => {});
+    }
+    return null;
+  }
+  const r = await page("click");
+  if (!r.caught) return null;
+  const left = files.slice(r.files.length);
+  return `Filled the file picker that ${t.what} opened with ${fileNames(r.files)}${left.length ? ` (it takes one file, so ${fileNames(left)} ${left.length === 1 ? "was" : "were"} left out)` : ""}`;
+}
+
+// force: the agent asked for a drop, so drop even if the page doesn't say it
+// takes one. Returns null when the element turned the drag down.
+async function dropFiles(tabId, t, files, byPath, useCdp, page, force) {
+  if (byPath && useCdp) {
+    const probe = force ? { accepted: true } : await page("probe");
+    if (!probe.accepted) return null;
+    const data = { items: [], files: files.map((f) => f.path), dragOperationsMask: 1 };
+    for (const type of ["dragEnter", "dragOver", "drop"]) await cdp(tabId, "Input.dispatchDragEvent", { type, x: t.x, y: t.y, data });
+    return `Dropped ${fileNames(files)} on ${t.what}`;
+  }
+  const r = await page("drop", { force });
+  if (!r.accepted && !force) return null;
+  return `Dropped ${fileNames(files)} on ${t.what}${r.accepted ? "" : " (the page didn't say it takes a drop; check that it took them)"}`;
+}
+
+// The marked element as a debugger object, searching open shadow roots and
+// same-origin frames. Null when it can't be reached that way.
+async function markedNode(tabId, marker) {
+  const r = await cdp(tabId, "Runtime.evaluate", { expression: `(${FIND_MARKED})(${JSON.stringify(marker)})`, returnByValue: false }).catch(() => null);
+  return r?.result?.objectId || null;
+}
+
+const FIND_MARKED = `function (marker) {
+  const sel = '[data-tether-mark="' + marker + '"]';
+  const find = (root) => {
+    const hit = root.querySelector(sel);
+    if (hit) return hit;
+    for (const el of root.querySelectorAll("*")) {
+      if (el.shadowRoot) { const h = find(el.shadowRoot); if (h) return h; }
+      if (el.tagName === "IFRAME" || el.tagName === "FRAME") { try { const d = el.contentDocument; if (d) { const h = find(d); if (h) return h; } } catch {} }
+    }
+    return null;
+  };
+  return find(document);
+}`;
+
+// Runs on a file input the picker named (this = the input).
+const FILL_INPUT = `function (files) {
+  const W = this.ownerDocument.defaultView;
+  const dt = new W.DataTransfer();
+  for (const f of files) {
+    const bin = W.atob(f.data);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    dt.items.add(new W.File([bytes], f.name, { type: f.type || "" }));
+  }
+  this.files = dt.files;
+  this.dispatchEvent(new W.Event("input", { bubbles: true, composed: true }));
+  this.dispatchEvent(new W.Event("change", { bubbles: true }));
+  return this.files.length;
+}`;
+
+// The page-world part, injected into the frame that holds the element.
+// Content scripts see page objects through wrappers in Firefox, so files and
+// events are made in the page's own world.
+async function pageUpload(tabId, frameId, action, marker, files, opts) {
+  const slim = files.map(({ name, type, data }) => ({ name, type, data }));
+  let r;
+  try {
+    [r] = await api.scripting.executeScript({ target: { tabId, frameIds: [frameId] }, world: "MAIN", func: pageUploadFn, args: [action, marker, slim, { ...opts, wait: PICKER_WAIT_MS }] });
+  } catch (e) {
+    throw new Error(`Couldn't reach the page to upload: ${e.message}`);
+  }
+  if (r?.error) throw new Error(String(r.error.message || r.error));
+  const out = r?.result;
+  if (out?.error) throw new Error(out.error);
+  return out || {};
+}
+
+// Serialised into the page, so it uses nothing from this file.
+async function pageUploadFn(action, marker, files, opts) {
+  const sel = `[data-tether-mark="${marker}"]`;
+  const find = (root) => {
+    const hit = root.querySelector(sel);
+    if (hit) return hit;
+    for (const el of root.querySelectorAll("*")) {
+      if (el.shadowRoot) { const h = find(el.shadowRoot); if (h) return h; }
+      if (el.tagName === "IFRAME" || el.tagName === "FRAME") { try { const d = el.contentDocument; if (d) { const h = find(d); if (h) return h; } } catch {} }
+    }
+    return null;
+  };
+  const el = find(document);
+  if (!el) return { error: "The element is gone. Take a new snapshot." };
+  const W = el.ownerDocument.defaultView;
+  const make = (list) => list.map((f) => {
+    const bin = W.atob(f.data);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new W.File([bytes], f.name, { type: f.type || "" });
+  });
+  const transfer = (list) => { const dt = new W.DataTransfer(); for (const f of list) dt.items.add(f); return dt; };
+  const fill = (input, list) => {
+    input.files = transfer(list).files;
+    input.dispatchEvent(new W.Event("input", { bubbles: true, composed: true }));
+    input.dispatchEvent(new W.Event("change", { bubbles: true }));
+  };
+  const r = el.getBoundingClientRect();
+  const at = { clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 };
+  const names = (list) => list.map((f) => ({ name: f.name }));
+
+  if (action === "input") {
+    const list = make(opts.single ? files.slice(0, 1) : files);
+    fill(el, list);
+    return { files: names(list) };
+  }
+
+  if (action === "paste") {
+    const list = make(files);
+    el.focus();
+    let e = new W.ClipboardEvent("paste", { bubbles: true, cancelable: true, composed: true, clipboardData: transfer(list) });
+    // Firefox ignores clipboardData in the constructor; its event has its own to fill.
+    if (!e.clipboardData || !e.clipboardData.files.length) {
+      e = new W.ClipboardEvent("paste", { bubbles: true, cancelable: true, composed: true });
+      if (!e.clipboardData) return { error: "This browser can't paste files into a page. Try via drop or picker." };
+      for (const f of list) e.clipboardData.items.add(f);
+    }
+    el.dispatchEvent(e);
+    return { files: names(list), taken: e.defaultPrevented };
+  }
+
+  if (action === "probe" || action === "drop") {
+    const list = action === "probe" ? [new W.File([""], "probe.txt", { type: "text/plain" })] : make(files);
+    const dt = transfer(list);
+    const init = { bubbles: true, cancelable: true, composed: true, dataTransfer: dt, ...at };
+    el.dispatchEvent(new W.DragEvent("dragenter", init));
+    const accepted = !el.dispatchEvent(new W.DragEvent("dragover", init));
+    if (action === "drop" && (accepted || opts.force)) el.dispatchEvent(new W.DragEvent("drop", init));
+    else el.dispatchEvent(new W.DragEvent("dragleave", init));
+    return { accepted, files: names(list) };
+  }
+
+  if (action === "click") {
+    // For the length of the call, a file input asked to open its picker (or
+    // the File System Access picker) gets the files instead. The originals go
+    // back as soon as the picker is caught or the wait is over.
+    const list = make(files);
+    const proto = W.HTMLInputElement.prototype;
+    const orig = { click: proto.click, showPicker: proto.showPicker, open: W.showOpenFilePicker };
+    let caught = null;
+    const isFile = (i) => (i.type || "").toLowerCase() === "file";
+    const take = (input) => { const l = input.multiple ? list : list.slice(0, 1); fill(input, l); caught = l; };
+    proto.click = function () { if (isFile(this) && !caught) return take(this); return orig.click.call(this); };
+    if (orig.showPicker) proto.showPicker = function () { if (isFile(this) && !caught) return take(this); return orig.showPicker.call(this); };
+    if (orig.open) {
+      W.showOpenFilePicker = async (o = {}) => {
+        if (caught) return orig.open.call(W, o);
+        caught = o.multiple ? list : list.slice(0, 1);
+        return caught.map((f) => ({ kind: "file", name: f.name, getFile: async () => f, queryPermission: async () => "granted", requestPermission: async () => "granted", isSameEntry: async (h) => h?.name === f.name }));
+      };
+    }
+    try {
+      const mouse = (type, extra = {}) => el.dispatchEvent(new (type.startsWith("pointer") ? W.PointerEvent : W.MouseEvent)(type, { bubbles: true, cancelable: true, composed: true, view: W, button: 0, pointerId: 1, pointerType: "mouse", isPrimary: true, ...at, ...extra }));
+      mouse("pointerdown", { buttons: 1 }); mouse("mousedown", { buttons: 1 });
+      mouse("pointerup"); mouse("mouseup");
+      el.click();
+      const end = Date.now() + opts.wait;
+      while (!caught && Date.now() < end) await new Promise((res) => setTimeout(res, 50));
+    } finally {
+      proto.click = orig.click;
+      if (orig.showPicker) proto.showPicker = orig.showPicker;
+      if (orig.open) W.showOpenFilePicker = orig.open;
+    }
+    return { caught: !!caught, files: names(caught || []) };
+  }
+  return { error: "Unknown upload action " + action };
+}
+
+// ---------------------------------------------------------------- drag
+// Drag libraries wait before they start a drag: a few pixels of movement
+// (dnd-kit, SortableJS) or a short hold (react-beautiful-dnd, touch-style
+// sensors). So the pointer moves a little, waits, travels in small steps a
+// frame apart and rests over the target before letting go. HTML5 drag and
+// drop (draggable=true) never starts from synthetic mouse moves; Chromium
+// hands that drag to the debugger (Input.setInterceptDrags), which then
+// drives it with drag events.
+
+const dragWaiters = new Map(); // tabId -> resolve(drag data)
+const dragPath = (x, y, toX, toY, n) => Array.from({ length: n }, (_, i) => ({ x: x + ((toX - x) * (i + 1)) / n, y: y + ((toY - y) * (i + 1)) / n }));
+
+async function cdpDrag(tabId, x, y, toX, toY) {
+  const move = (p, buttons = 1) => cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", x: p.x, y: p.y, button: "left", buttons });
+  let intercepted = null;
+  // Pressing on selected text drags the text instead of the element, and a
+  // click anywhere would have cleared it first.
+  await cdp(tabId, "Runtime.evaluate", { expression: "getSelection().removeAllRanges()" }).catch(() => {});
+  await cdp(tabId, "Input.setInterceptDrags", { enabled: true }).catch(() => {});
+  dragWaiters.set(tabId, (data) => { intercepted = data; });
+  try {
+    await move({ x, y }, 0);
+    await cdp(tabId, "Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", buttons: 1, clickCount: 1 });
+    // A few pixels first, so the drag starts where it was picked up.
+    const dir = Math.hypot(toX - x, toY - y) || 1;
+    for (const d of [3, 6, 10]) {
+      await move({ x: x + ((toX - x) / dir) * d, y: y + ((toY - y) / dir) * d });
+      await sleep(16);
+    }
+    await sleep(150);
+    const steps = dragPath(x, y, toX, toY, 18);
+    if (!intercepted) {
+      for (const p of steps) {
+        if (intercepted) break;
+        await move(p);
+        await sleep(16);
+      }
+    }
+    if (intercepted) {
+      // An HTML5 drag: finish it with drag events, which is what a person's
+      // mouse does once the browser has taken over.
+      const data = intercepted;
+      await cdp(tabId, "Input.dispatchDragEvent", { type: "dragEnter", x: steps[0].x, y: steps[0].y, data });
+      for (const p of steps) {
+        await cdp(tabId, "Input.dispatchDragEvent", { type: "dragOver", x: p.x, y: p.y, data });
+        await sleep(16);
+      }
+      await sleep(100);
+      await cdp(tabId, "Input.dispatchDragEvent", { type: "dragOver", x: toX, y: toY, data });
+      await cdp(tabId, "Input.dispatchDragEvent", { type: "drop", x: toX, y: toY, data });
+    } else {
+      await sleep(100);
+      await move({ x: toX, y: toY });
+    }
+    await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseReleased", x: toX, y: toY, button: "left", buttons: 0, clickCount: 1 });
+    return { html5: !!intercepted };
+  } finally {
+    dragWaiters.delete(tabId);
+    await cdp(tabId, "Input.setInterceptDrags", { enabled: false }).catch(() => {});
+  }
+}
+
+async function drag(tabId, p) {
+  const a = splitRef(p.from), b = splitRef(p.to);
+  if (a.frameId !== b.frameId) throw new Error("from and to are in different frames. Drag within one frame, or use click_at with to_x and to_y.");
+  const pt = await toContent(tabId, { cmd: "dragPoints", from: a.ref, to: b.ref, position: p.position }, true, a.frameId);
+  let res;
+  try {
+    let off = null;
+    if (state.cdp.has(tabId)) { try { off = await frameOffset(tabId, a.frameId); } catch {} }
+    if (off) res = await cdpDrag(tabId, pt.x1 + off.x, pt.y1 + off.y, pt.x2 + off.x, pt.y2 + off.y);
+    else {
+      const [r] = await api.scripting.executeScript({ target: { tabId, frameIds: [a.frameId] }, world: "MAIN", func: pageDragFn, args: [pt.marker, p.position || ""] });
+      if (r?.result?.error) throw new Error(r.result.error);
+      res = r?.result || {};
+    }
+  } finally {
+    await toContent(tabId, { cmd: "dragDone", marker: pt.marker, toX: pt.x2, toY: pt.y2 }, false, a.frameId).catch(() => {});
+  }
+  await settle(tabId);
+  return { note: pt.note };
+}
+
+// Without the debugger: pointer and mouse events along the way, and the
+// HTML5 drag events when the element (or an ancestor) is draggable. Runs in
+// the page's world, so it uses nothing from this file.
+async function pageDragFn(marker, position) {
+  const find = (sel, root = document) => {
+    const hit = root.querySelector(sel);
+    if (hit) return hit;
+    for (const el of root.querySelectorAll("*")) {
+      if (el.shadowRoot) { const h = find(sel, el.shadowRoot); if (h) return h; }
+      if (el.tagName === "IFRAME") { try { const d = el.contentDocument; if (d) { const h = find(sel, d); if (h) return h; } } catch {} }
+    }
+    return null;
+  };
+  const from = find(`[data-tether-mark="${marker}-from"]`), to = find(`[data-tether-mark="${marker}-to"]`);
+  if (!from || !to) return { error: "The element is gone. Take a new snapshot." };
+  const W = from.ownerDocument.defaultView;
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const ra = from.getBoundingClientRect(), rb = to.getBoundingClientRect();
+  const x1 = ra.left + ra.width / 2, y1 = ra.top + ra.height / 2;
+  const x2 = rb.left + rb.width / 2;
+  const y2 = position === "before" ? rb.top + rb.height * 0.2 : position === "after" ? rb.top + rb.height * 0.8 : rb.top + rb.height / 2;
+  const at = (x, y) => from.ownerDocument.elementFromPoint(x, y) || to;
+  const fire = (el, type, x, y, extra = {}) => {
+    const E = type.startsWith("pointer") ? W.PointerEvent : W.MouseEvent;
+    return el.dispatchEvent(new E(type, { bubbles: true, cancelable: true, composed: true, view: W, clientX: x, clientY: y, screenX: x, screenY: y, button: 0, pointerId: 1, pointerType: "mouse", isPrimary: true, ...extra }));
+  };
+  W.getSelection()?.removeAllRanges();
+  const source = from.closest("[draggable=true]");
+  fire(from, "pointerover", x1, y1); fire(from, "pointerdown", x1, y1, { buttons: 1 }); fire(from, "mousedown", x1, y1, { buttons: 1 });
+  let dt = null;
+  if (source) {
+    dt = new W.DataTransfer();
+    const go = source.dispatchEvent(new W.DragEvent("dragstart", { bubbles: true, cancelable: true, composed: true, dataTransfer: dt, clientX: x1, clientY: y1 }));
+    if (!go) dt = null;
+  }
+  await sleep(150);
+  let over = null;
+  for (let i = 1; i <= 18; i++) {
+    const x = x1 + ((x2 - x1) * i) / 18, y = y1 + ((y2 - y1) * i) / 18;
+    const el = at(x, y);
+    if (dt) {
+      if (el !== over) { el.dispatchEvent(new W.DragEvent("dragenter", { bubbles: true, cancelable: true, composed: true, dataTransfer: dt, clientX: x, clientY: y })); over?.dispatchEvent(new W.DragEvent("dragleave", { bubbles: true, composed: true, dataTransfer: dt, clientX: x, clientY: y })); over = el; }
+      el.dispatchEvent(new W.DragEvent("dragover", { bubbles: true, cancelable: true, composed: true, dataTransfer: dt, clientX: x, clientY: y }));
+      source.dispatchEvent(new W.DragEvent("drag", { bubbles: true, composed: true, dataTransfer: dt, clientX: x, clientY: y }));
+    } else {
+      fire(el, "pointermove", x, y, { buttons: 1 }); fire(el, "mousemove", x, y, { buttons: 1 });
+    }
+    await sleep(16);
+  }
+  await sleep(100);
+  const end = at(x2, y2);
+  if (dt) {
+    end.dispatchEvent(new W.DragEvent("drop", { bubbles: true, cancelable: true, composed: true, dataTransfer: dt, clientX: x2, clientY: y2 }));
+    source.dispatchEvent(new W.DragEvent("dragend", { bubbles: true, composed: true, dataTransfer: dt, clientX: x2, clientY: y2 }));
+  }
+  fire(end, "pointerup", x2, y2); fire(end, "mouseup", x2, y2);
+  return { html5: !!dt };
 }
 
 async function cdpMouse(tabId, x, y, clicks) {
@@ -2262,6 +2739,7 @@ async function popupState(tabId) {
     userScripts: state.userScripts,
     tab: tab && { id: tab.id, title: tab.title, url: tab.url, favIconUrl: tab.favIconUrl, shareable: shareable(tab.url), shared: state.shared.has(tab.id), paused: state.paused.get(tab.id) || null, by: state.shared.get(tab.id)?.by, mode: state.shared.get(tab.id)?.mode || "full", confirming: publicConfirm(state.confirming.get(tab.id)), cdp: state.cdp.has(tab.id), activity: state.activity.get(tab.id) },
     siteAsk: tab ? await siteAsk(hostOf(tab.url)) : "risky",
+    siteUploads: tab ? await uploadsAllowed(hostOf(tab.url)) : false,
     hasPanel: !!(api.sidePanel || api.sidebarAction),
     others: (await tabList()).filter((t) => t.id !== tabId).map((t) => ({ ...t, activity: state.activity.get(t.id) })),
     scripts: tab ? scriptsFor(tab.url).map(({ id, name, description, run }) => ({ id, name, description, run, on: !state.disabledScripts.has(id) })) : [],
@@ -2315,6 +2793,10 @@ api.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       case "setMode":
         await setMode(msg.tabId, msg.mode);
         return { ok: true };
+      case "setSiteUploads":
+        await setUploadsAllowed(msg.host, !!msg.value);
+        broadcast();
+        return { ok: true };
       case "setSiteAsk":
         await setSiteAsk(msg.host, msg.value);
         broadcast();
@@ -2327,7 +2809,7 @@ api.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (id == null || (fromPage && msg.tabId != null && msg.tabId !== id)) return { ok: false };
         const c = state.confirming.get(id);
         if (!c || (msg.id && msg.id !== c.id)) return { ok: false };
-        return { ok: answerConfirm(id, msg.allow) };
+        return { ok: answerConfirm(id, msg.allow, msg.always) };
       }
       case "unshare":
         await unshare(msg.tabId);

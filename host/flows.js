@@ -12,8 +12,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { SITES_DIR } from "./config.js";
 import { safe, eventsOf } from "./sites.js";
+import { resolveFiles, payload } from "./files.js";
 
-export const STEP_KINDS = ["open", "click", "type", "select", "check", "press", "wait", "ask_user"];
+export const STEP_KINDS = ["open", "click", "type", "select", "check", "press", "wait", "upload", "ask_user"];
 const TEXT_FIELDS = ["url", "selector", "name", "value", "text", "message", "key", "frame"];
 const HOLE = /\{\{\s*([\w-]+)\s*\}\}/g;
 
@@ -59,8 +60,8 @@ function checkStep(s, i) {
   const n = `Step ${i + 1} (${s.do})`;
   const target = s.selector || s.name;
   if (s.do === "open" && !s.url) throw new Error(`${n} needs url.`);
-  if (["click", "type", "select", "check"].includes(s.do) && !target) throw new Error(`${n} needs selector or name to find its element.`);
-  if (["type", "select"].includes(s.do) && typeof s.value !== "string") throw new Error(`${n} needs value as a string.`);
+  if (["click", "type", "select", "check", "upload"].includes(s.do) && !target) throw new Error(`${n} needs selector or name to find its element.`);
+  if (["type", "select", "upload"].includes(s.do) && typeof s.value !== "string") throw new Error(`${n} needs value as a string.`);
   if (s.do === "check" && typeof s.value !== "boolean") throw new Error(`${n} needs value true or false.`);
   if (s.do === "press" && !s.key) throw new Error(`${n} needs key.`);
   if (s.do === "wait" && !s.text && !s.ms) throw new Error(`${n} needs text or ms.`);
@@ -131,6 +132,13 @@ export function draftSteps(host, session, { from = 0, limit = 400 } = {}) {
         break;
       case "input": {
         if (!e.target) break;
+        if (e.target.role === "file") {
+          // The click that opened the file dialog becomes the upload itself,
+          // so a replay never opens the dialog.
+          const opener = last?.do === "click" ? steps.pop() : null;
+          steps.push({ do: "upload", ...(opener ? { selector: opener.selector, scope: opener.scope, role: opener.role, name: opener.name } : target(e.target)), value: "{{file}}" });
+          break;
+        }
         const again = last && ["type", "ask_user"].includes(last.do) && last.selector === e.target.selector;
         if (again) steps.pop();
         // Passwords, card numbers and codes are never recorded: the user types them.
@@ -199,6 +207,10 @@ async function runStep(hub, handle, s, agent, leftMs) {
     case "wait": {
       const timeout = (s.timeout_seconds ?? 15) * 1000;
       return (await hub.callTab(handle, "waitFor", { text: s.text, gone: s.gone, ms: s.ms, timeout }, timeout + (s.ms ?? 0) + 5000)).note;
+    }
+    case "upload": {
+      const files = await resolveFiles(String(s.value).split(/\s*\|\s*/).filter(Boolean));
+      return (await call("upload", { ref: await locate(hub, handle, s), files: payload(files) })).note;
     }
     case "ask_user": {
       const timeout = Math.max(5000, leftMs);

@@ -46,6 +46,7 @@ function renderAsks() {
           <p class="where">${where}</p>
           <div class="actions">
             <button data-act="deny" data-tab="${t.id}" data-cid="${esc(c.id)}">Deny</button>
+            ${c.kind === "upload" ? `<button data-act="always" data-tab="${t.id}" data-cid="${esc(c.id)}" title="Allow uploads on this site from now on, without asking">Always here</button>` : ""}
             <button class="primary" data-act="allow" data-tab="${t.id}" data-cid="${esc(c.id)}">Allow</button>
           </div>
         </section>`);
@@ -136,9 +137,10 @@ document.addEventListener("click", async (e) => {
   try {
     switch (b.dataset.act) {
       case "allow":
+      case "always":
       case "deny":
-        await send({ type: "confirmAnswer", tabId, id: b.dataset.cid, allow: b.dataset.act === "allow" });
-        sound(b.dataset.act === "allow" ? "paid" : "hush");
+        await send({ type: "confirmAnswer", tabId, id: b.dataset.cid, allow: b.dataset.act !== "deny", always: b.dataset.act === "always" });
+        sound(b.dataset.act !== "deny" ? "paid" : "hush");
         break;
       case "pause":
       case "resume":

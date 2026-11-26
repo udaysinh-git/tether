@@ -111,6 +111,7 @@ function tabCard() {
         </div>
         <div class="row-actions">
           <button data-act="deny" data-cid="${esc(c.id)}">Deny</button>
+          ${c.kind === "upload" ? `<button data-act="always" data-cid="${esc(c.id)}" title="Allow uploads on this site from now on, without asking">Always here</button>` : ""}
           <button class="primary" data-act="allow" data-cid="${esc(c.id)}">Allow</button>
         </div>
       </section>`;
@@ -148,12 +149,12 @@ const ASK_LABELS = { risky: "Risky actions", all: "Every action", never: "Never"
 function askRow() {
   const t = st.tab;
   if (!st.paired || !t?.shareable) return "";
-  const hint = { risky: "You allow or deny buttons that buy, pay, send, post or delete.", all: "You allow or deny every click, keystroke and script.", never: "Agents act without asking here." }[st.siteAsk];
+  const hint = { risky: "You allow or deny buttons that buy, pay, send, post or delete, and every upload.", all: "You allow or deny every click, keystroke and script.", never: "Agents act without asking here, uploads too." }[st.siteAsk];
   return `
     <div class="toggle-row ask-row">
       <div class="grow">
         <p>Ask first on this site</p>
-        <p class="faint">${hint}</p>
+        <p class="faint">${hint}${st.siteUploads ? ` Uploads are allowed without asking. <a href="#" data-act="uploadsAsk">Ask again</a>` : ""}</p>
       </div>
       <div class="seg" role="radiogroup" aria-label="Ask first on ${esc(st.host)}">
         ${Object.entries(ASK_LABELS).map(([v, l]) => `<button role="radio" aria-checked="${st.siteAsk === v}" data-act="siteAsk" data-value="${v}" title="${esc(l)}">${v === "risky" ? "Risky" : v === "all" ? "All" : "Never"}</button>`).join("")}
@@ -468,12 +469,16 @@ app.addEventListener("click", async (e) => {
         sound("landed");
         break;
       case "allow":
+      case "always":
       case "deny":
-        await send({ type: "confirmAnswer", tabId, id: b.dataset.cid, allow: b.dataset.act === "allow" });
-        sound(b.dataset.act === "allow" ? "paid" : "hush");
+        await send({ type: "confirmAnswer", tabId, id: b.dataset.cid, allow: b.dataset.act !== "deny", always: b.dataset.act === "always" });
+        sound(b.dataset.act !== "deny" ? "paid" : "hush");
         break;
       case "mode":
         await send({ type: "setMode", tabId, mode: b.dataset.on === "true" ? "read" : "full" });
+        break;
+      case "uploadsAsk":
+        await send({ type: "setSiteUploads", host: st.host, value: false });
         break;
       case "siteAsk":
         await send({ type: "setSiteAsk", host: st.host, value: b.dataset.value });

@@ -140,11 +140,22 @@
     return line;
   }
 
+  // "Drag files here", "Drop your images", "drag and drop to upload".
+  const DROP_WORDS = /\b(drag|drop)\b/i;
+  const DROP_WHAT = /\b(files?|here|images?|photos?|pictures?|uploads?|documents?|videos?|attachments?|pdfs?|csvs?)\b/i;
+  function looksLikeDrop(el) {
+    const t = el.innerText || "";
+    if (!t || t.length > 200 || !DROP_WORDS.test(t) || !DROP_WHAT.test(t)) return false;
+    const r = el.getBoundingClientRect();
+    return r.width >= 40 && r.height >= 24;
+  }
+
   function snapshot({ maxLines = 400, root } = {}) {
     const lines = [];
     let truncated = false;
     let buf = "";
     let depth = 0;
+    let inDrop = false;
 
     const emit = (s) => {
       if (lines.length >= maxLines) { truncated = true; return; }
@@ -220,12 +231,14 @@
         (r && INTERACTIVE_ROLES.has(r)) ||
         (r !== "heading" && el.hasAttribute("onclick")) ||
         (!r && style.cursor === "pointer" && el.parentElement && getComputedStyle(el.parentElement).cursor !== "pointer" && el.tabIndex >= 0);
+      // Items that can be dragged (HTML5 drag and drop), so drag has a ref for them.
+      const draggable = !interactive && el.getAttribute("draggable") === "true";
 
-      if (interactive && r !== "heading") {
+      if ((interactive || draggable) && r !== "heading") {
         if (!visible(el, style)) return;
         if (!inline) flush();
         else if (buf.trim()) flush();
-        emit(describe(el, r || "clickable"));
+        emit(describe(el, draggable ? "draggable" : r || "clickable"));
         // Selects, inputs and plain buttons have nothing else worth reading inside.
         if (["SELECT", "INPUT", "TEXTAREA"].includes(el.tagName) || r === "textbox" || !el.querySelector("a[href],button,input,select,textarea,[role=button],[role=link]")) return;
       } else if (el.tagName === "IMG") {
@@ -247,6 +260,20 @@
       }
 
       if (r === "heading") return;
+      // Drop areas are often plain boxes with no role. Give the outermost one
+      // a ref so upload_file can be pointed at it.
+      if (!inline && !inDrop && el !== document.body && looksLikeDrop(el)) {
+        flush();
+        emit(describe(el, "drop area"));
+        if (!el.querySelector("a[href],button,input,select,textarea,[role=button],[role=link]")) return;
+        inDrop = true;
+        depth++;
+        for (const c of kids(el)) walk(c);
+        flush();
+        depth--;
+        inDrop = false;
+        return;
+      }
       if (!inline) flush();
       for (const c of kids(el)) walk(c);
       if (!inline) flush();
@@ -289,7 +316,7 @@
 
   async function risk({ ref, kind, x, y }) {
     let el;
-    if (ref) el = byRef(ref);
+    if (ref) el = isRef(ref) ? byRef(ref) : byText(ref);
     else {
       // click_at: judge whatever is under the point.
       const hit = elementAt(x, y);
@@ -837,22 +864,158 @@
     throw new Error(`Timed out after ${timeout}ms waiting for “${text}” to ${gone ? "disappear" : "appear"}.`);
   }
 
-  async function upload({ ref, files }) {
+  // ---- uploads
+  // The background delivers the files (debugger or page world); this side
+  // says what the element is and marks it so page-world code can find it.
+  // The mark is a data attribute that lives only for the length of the call.
+  const isFileInput = (el) => el?.tagName === "INPUT" && (el.type || "").toLowerCase() === "file";
+
+  function fileInputFor(el) {
+    if (isFileInput(el)) return el;
+    if (el.tagName === "LABEL" && isFileInput(el.control)) return el.control;
+    const lab = el.closest?.("label");
+    if (lab && isFileInput(lab.control)) return lab.control;
+    // A drop area or button with its input inside, unless it is a big
+    // container holding several.
+    const inner = el.querySelectorAll?.('input[type="file" i]') || [];
+    if (inner.length === 1) return inner[0];
+    // An invisible input laid over a styled button.
+    const r = el.getBoundingClientRect();
+    const over = el.ownerDocument.elementsFromPoint(r.left + r.width / 2, r.top + r.height / 2).find(isFileInput);
+    return over || null;
+  }
+
+  const isTextTarget = (el) => el.isContentEditable || el.tagName === "TEXTAREA" || (el.tagName === "INPUT" && /^(text|search|email|url|)$/i.test(el.type || "")) || ["textbox", "searchbox"].includes(el.getAttribute("role"));
+  const isClickable = (el) => !!el.closest?.(CLICKABLE) || getComputedStyle(el).cursor === "pointer";
+
+  async function uploadTarget({ ref, via }) {
     const el = byRef(ref);
-    if (el.tagName !== "INPUT" || el.type !== "file") throw new Error(`${label(el)} is not a file input. Look for a "file input" line in the snapshot.`);
-    const dt = new DataTransfer();
-    for (const f of files) {
-      const bin = atob(f.data);
-      const bytes = new Uint8Array(bin.length);
-      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-      dt.items.add(new File([bytes], f.name, { type: f.type }));
+    await reveal(el);
+    const input = via && via !== "input" ? null : fileInputFor(el);
+    let kind;
+    if (via === "input" && !input) throw new Error(`${label(el)} has no file input. Try without via, or use via "picker" if it opens a file dialog.`);
+    if (via) kind = via === "input" ? "input" : via === "picker" ? "click" : via;
+    else if (input) kind = "input";
+    else if (isTextTarget(el)) kind = "paste";
+    else if (isClickable(el)) kind = "click";
+    else kind = "other";
+    const target = kind === "input" ? input : el;
+    const marker = Math.random().toString(36).slice(2, 10);
+    target.setAttribute("data-tether-mark", marker);
+    const pt = await locate({ ref, verb: kind === "click" || kind === "other" ? "Clicked" : "Used" }).catch(() => ({ x: 0, y: 0 }));
+    return { kind, marker, x: pt.x, y: pt.y, what: label(el), input: input && { multiple: input.multiple, accept: input.accept || "", what: label(input) } };
+  }
+
+  function uploadDone({ marker, note }) {
+    const walk = (root) => {
+      for (const el of root.querySelectorAll(`[data-tether-mark="${marker}"]`)) el.removeAttribute("data-tether-mark");
+      for (const el of root.querySelectorAll("*")) {
+        if (el.shadowRoot) walk(el.shadowRoot);
+        if (el.tagName === "IFRAME") { try { if (el.contentDocument) walk(el.contentDocument); } catch {} }
+      }
+    };
+    if (marker) walk(document);
+    if (note) setActivity(note);
+    return {};
+  }
+
+  // When nothing took the files: where they could go instead.
+  const DROPPY = /\b(drag|drop|upload|browse|attach|choose (a )?files?|select (a )?files?|add (a )?files?|import)\b/i;
+  function uploadHints() {
+    const inputs = [];
+    const areas = [];
+    for (const root of allRoots()) {
+      for (const el of root.querySelectorAll('input[type="file" i]')) inputs.push(`file input ${q(nameOf(el))} [${refFor(el)}]`);
+      for (const el of root.querySelectorAll('button, [role="button"], a, label, div, section')) {
+        if (areas.length >= 8 || el === pillHost) continue;
+        const own = [...el.childNodes].filter((n) => n.nodeType === 3).map((n) => n.nodeValue).join(" ") + " " + (el.getAttribute("aria-label") || "");
+        const r = el.getBoundingClientRect();
+        if (r.width && r.height && DROPPY.test(own)) areas.push(`${label(el)} [${refFor(el)}]`);
+      }
     }
-    el.files = dt.files;
-    el.dispatchEvent(new Event("input", { bubbles: true }));
-    el.dispatchEvent(new Event("change", { bubbles: true }));
-    const note = `Attached ${files.map((f) => f.name).join(", ")}`;
+    return { inputs: inputs.slice(0, 8), areas };
+  }
+
+  // ---- drag (moving a card, reordering a list, a slider)
+  // Points for the background to drag between, in this frame's viewport plus
+  // the offset of same-origin frames, like locate. Both ends get a mark so the
+  // page-world fallback can find them.
+  function frameShift(el) {
+    let x = 0, y = 0;
+    let win = el.ownerDocument.defaultView;
+    while (win && win !== window && win.frameElement) {
+      const fr = win.frameElement.getBoundingClientRect();
+      x += fr.left;
+      y += fr.top;
+      win = win.parent;
+    }
+    return { x, y };
+  }
+
+  // A drag end is a ref, or visible text for things the outline gives no ref
+  // (a column's heading, a folder's name): the smallest visible element whose
+  // text is exactly that, or else contains it.
+  const isRef = (s) => /^\[?(f\d+\.)?e\d+\]?$/.test(String(s));
+  function byText(text) {
+    const want = flat(text);
+    let exact = null, partial = null;
+    const area = (el) => { const r = el.getBoundingClientRect(); return r.width * r.height; };
+    for (const root of allRoots()) {
+      for (const el of root.querySelectorAll("body *")) {
+        if (el === pillHost || SKIP.has(el.tagName)) continue;
+        const t = flat(el.innerText || el.getAttribute("aria-label") || "");
+        if (!t || t.length > want.length * 4 + 40) continue;
+        const a = area(el);
+        if (!a) continue;
+        if (t === want) { if (!exact || a < area(exact)) exact = el; }
+        else if (t.includes(want) && (!partial || a < area(partial))) partial = el;
+      }
+    }
+    const el = exact || partial;
+    if (!el) throw new Error(`Nothing on the page says “${text}”. Pass a ref from the snapshot, or the exact visible text of the element.`);
+    return el;
+  }
+  const dragEnd = (s) => (isRef(s) ? byRef(s) : byText(s));
+
+  async function dragPoints({ from, to, position }) {
+    const a = dragEnd(from), b = dragEnd(to);
+    if (a === b) throw new Error("from and to are the same element.");
+    a.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" });
+    // Keep both ends on screen when they fit; otherwise the page has to scroll
+    // while dragging, which most drag libraries do by themselves near the edge.
+    let rb = b.getBoundingClientRect();
+    if (rb.bottom > innerHeight || rb.top < 0) {
+      const ra = a.getBoundingClientRect();
+      const mid = (Math.min(ra.top, rb.top) + Math.max(ra.bottom, rb.bottom)) / 2;
+      scrollBy({ top: mid - innerHeight / 2, behavior: "instant" });
+    }
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const ra = a.getBoundingClientRect();
+    rb = b.getBoundingClientRect();
+    const sa = frameShift(a), sb = frameShift(b);
+    const x1 = ra.left + ra.width / 2 + sa.x, y1 = ra.top + ra.height / 2 + sa.y;
+    // before / after: the top or bottom quarter of the target (left or right
+    // quarter when the target is wider than it is tall and sits in a row).
+    const sib = b.nextElementSibling || b.previousElementSibling;
+    const rs = sib?.getBoundingClientRect();
+    const row = !!position && !!rs && Math.abs(rs.top - rb.top) < rb.height / 2 && Math.abs(rs.left - rb.left) > rb.width / 2;
+    let x2 = rb.left + rb.width / 2, y2 = rb.top + rb.height / 2;
+    if (position === "before") row ? (x2 = rb.left + rb.width * 0.2) : (y2 = rb.top + rb.height * 0.2);
+    if (position === "after") row ? (x2 = rb.left + rb.width * 0.8) : (y2 = rb.top + rb.height * 0.8);
+    x2 += sb.x; y2 += sb.y;
+    const marker = Math.random().toString(36).slice(2, 10);
+    a.setAttribute("data-tether-mark", marker + "-from");
+    b.setAttribute("data-tether-mark", marker + "-to");
+    await moveCursorTo(Math.round(x1), Math.round(y1));
+    const note = `Dragged ${label(a)} ${position === "before" ? "to just before" : position === "after" ? "to just after" : "onto"} ${label(b)}`;
     setActivity(note);
-    return { note };
+    return { x1, y1, x2, y2, marker, note };
+  }
+
+  function dragDone({ marker, toX, toY }) {
+    for (const root of allRoots()) for (const el of root.querySelectorAll(`[data-tether-mark^="${marker}-"]`)) el.removeAttribute("data-tether-mark");
+    if (toX != null) moveCursorTo(Math.round(toX), Math.round(toY));
+    return {};
   }
 
   function readText({ ref, maxChars = 20000 }) {
@@ -965,6 +1128,7 @@
           <div class="lines"><div class="t"></div><div class="s"></div></div>
           <div class="btns">
             <button type="button" class="act" hidden></button>
+            <button type="button" class="always" hidden title="Allow uploads on this site from now on, without asking">Always here</button>
             <button type="button" class="stop" title="Stop sharing and recording this tab">Stop</button>
           </div>
         </div>
@@ -980,6 +1144,11 @@
       if (confirm) { ring("hush"); api.runtime.sendMessage({ type: "confirmAnswer", id: confirm.id, allow: false }); return; }
       ring("hush");
       api.runtime.sendMessage({ type: "stop" });
+    });
+    pillRoot.querySelector("button.always").addEventListener("click", (e) => {
+      if (!e.isTrusted || !confirm) return;
+      ring("paid");
+      api.runtime.sendMessage({ type: "confirmAnswer", id: confirm.id, allow: true, always: true });
     });
     makeDraggable(pillRoot.querySelector(".pill"));
     pillRoot.querySelector(".pill").title = "Drag to move. Double-click to put it back in the corner.";
@@ -1019,6 +1188,7 @@
     pill.classList.toggle("confirm", asking);
     pill.setAttribute("role", asking ? "alertdialog" : "status");
     act.hidden = !shared || (mode === "read" && !paused && !asking);
+    pillRoot.querySelector("button.always").hidden = !(asking && confirm.kind === "upload");
     stop.textContent = asking ? "Deny" : "Stop";
     stop.title = asking ? "Don't let the agent do this" : "Stop sharing and recording this tab";
     stop.classList.toggle("deny", asking);
@@ -1513,7 +1683,7 @@
 
   // ------------------------------------------------------------ wiring
 
-  const handlers = { snapshot, readText, locate, focusFor, click, hover, type, fill, select, press, scroll, waitFor, upload, listMedia, mediaRead, videoFrame, risk, find, clickAt, pointAt, viewport };
+  const handlers = { snapshot, readText, locate, focusFor, click, hover, type, fill, select, press, scroll, waitFor, uploadTarget, uploadDone, uploadHints, dragPoints, dragDone, listMedia, mediaRead, videoFrame, risk, find, clickAt, pointAt, viewport };
 
   api.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg.agents) agents = msg.agents;
