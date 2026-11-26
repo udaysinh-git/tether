@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.6.0 (unreleased)
+## 0.6.0 (2026-11-27)
 
 - Uploads without a file dialog. `upload_file` takes whatever the user would use: a file input, a button that opens a file dialog (Tether catches the dialog and fills it, also for inputs made on the fly and `showPicker()`), a drop area, or a chat box that takes pasted files. A button that opens a menu first returns the menu, so the agent can pick "From computer". Before, an upload button opened the system dialog and the agent had to hand over to you.
 - Paths can use `~`, `%USERPROFILE%` and `$HOME`, a wildcard in the file name, a folder, or `download:<id>` from `list_downloads`. `upload_file` without a ref lists what the paths match, and a wrong path comes back with files of a similar name. Keys, `.env` files, `~/.ssh`, `~/.tether` and browser profiles are refused.

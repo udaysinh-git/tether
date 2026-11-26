@@ -1,6 +1,6 @@
 # Plan: uploads, file drops and drag and drop
 
-Status: built for 0.6.0 on 2026-11-27, not yet released. Where the build differs from the plan below:
+Status: built and released as 0.6.0 on 2026-11-27. Where the build differs from the plan below:
 
 - An element that is neither a file input, a text box, a button nor a drop area is not clicked as a last try; clicking something not meant to be clicked could toggle or open anything. `via: "picker"` forces it.
 - The outline gives drop areas (`drop area "Drag files here"`) and `draggable="true"` items a ref, and either end of `drag` can be visible text instead of a ref (a column heading, "Delete").
